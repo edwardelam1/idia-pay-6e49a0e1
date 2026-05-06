@@ -12,13 +12,10 @@ export type ACAArtifact = {
 
 const CURRENT_EMPLOYEE_ID = "EMP-OS-0001";
 
-export async function dispatchToSynapseController(artifact: ACAArtifact): Promise<void> {
+export function dispatchToSynapseController(artifact: ACAArtifact): void {
   console.log(
-    `[SYNAPSE_DISPATCH]: START - actionType="${artifact.actionType}" ts=${artifact.timestamp}`,
+    `[SYNAPSE_DISPATCH]: actionType="${artifact.actionType}" ts=${artifact.timestamp} veracity=${artifact.veracityScore}`,
   );
-  // Simulated egress. In production this hands off to the Synapse Controller (Data Sale).
-  await new Promise((r) => setTimeout(r, 8));
-  console.log(`[SYNAPSE_DISPATCH]: END - artifact transmitted (veracity=${artifact.veracityScore})`);
 }
 
 export async function withACA(
