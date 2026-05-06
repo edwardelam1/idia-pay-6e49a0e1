@@ -149,3 +149,11 @@
     color: var(--color-foreground);
   }
 }
+
+@keyframes idia-loop {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(-50%); }
+}
+.idia-loop-scroll {
+  animation: idia-loop 28s linear infinite;
+}
