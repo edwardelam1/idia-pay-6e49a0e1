@@ -1,11 +1,16 @@
-// IDIA Pay - The Registry: maps provisioning codes to vertical cartons.
-// In production this would be served by The Hub. Here we model it as a typed
-// in-memory registry that the hydration engine consumes as if it were live JSON.
+// IDIA Pay - Live Registry: fetches vertical cartons from Supabase
+// (table: device_provisioning_blueprints, column: payload).
+import { supabase } from "@/integrations/supabase/client";
 
 export type NanoBiteSpec = {
   id: string;
-  screen: string; // Screen Tag e.g. "Sales" | "Inventory" | "Logistics" | "Management"
+  screen: string;
   order: number;
+  task?: string;
+  microElement?: string;
+  valueChainStage?: string;
+  cadence?: string;
+  requiresTier?: string;
 };
 
 export type SubModule = {
@@ -20,63 +25,89 @@ export type VerticalCarton = {
   provisioningCode: string;
   industry: string;
   subModules: SubModule[];
+  raw?: unknown;
 };
 
-export const REGISTRY: VerticalCarton[] = [
-  {
-    provisioningCode: "IDIA-HOSP-001",
-    industry: "Hospitality",
-    subModules: [
-      {
-        id: "hosp-fine-dining",
-        label: "Fine Dining",
-        description: "Tableside POS, billing, stock & staff",
-        industry: "Hospitality · Fine Dining",
-        nanoBites: [
-          { id: "nb-pos-terminal", screen: "Sales", order: 1 },
-          { id: "nb-hosp-billing", screen: "Sales", order: 2 },
-          { id: "nb-stock-check", screen: "Inventory", order: 1 },
-          { id: "nb-employee-id", screen: "Management", order: 1 },
-        ],
-      },
-      {
-        id: "hosp-quick-service",
-        label: "Quick Service",
-        description: "Counter POS for high-volume venues",
-        industry: "Hospitality · QSR",
-        nanoBites: [
-          { id: "nb-pos-terminal", screen: "Sales", order: 1 },
-          { id: "nb-stock-check", screen: "Inventory", order: 1 },
-        ],
-      },
-    ],
-  },
-  {
-    provisioningCode: "IDIA-RETAIL-001",
-    industry: "Retail",
-    subModules: [
-      {
-        id: "retail-boutique",
-        label: "Boutique Retail",
-        description: "POS, inventory and logistics",
-        industry: "Retail · Boutique",
-        nanoBites: [
-          { id: "nb-pos-terminal", screen: "Sales", order: 1 },
-          { id: "nb-stock-check", screen: "Inventory", order: 1 },
-          { id: "nb-logistics-dispatch", screen: "Logistics", order: 1 },
-          { id: "nb-employee-id", screen: "Management", order: 1 },
-        ],
-      },
-    ],
-  },
-];
+function slugify(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
 
-export function resolveProvisioningCode(code: string): VerticalCarton | null {
-  console.log(`[REGISTRY_LOOKUP]: START - code="${code}"`);
+function pickScreen(nb: Record<string, unknown>): string {
+  const screenTag = (nb.screenTag as string) || (nb.screen as string);
+  if (screenTag) return screenTag;
+  const me = nb.microElement as string | undefined;
+  if (me) return me;
+  const vcs = nb.valueChainStage as string | undefined;
+  if (vcs) {
+    return vcs
+      .split(/[_\s]+/)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ");
+  }
+  return "General";
+}
+
+function normalizeBundle(bundle: Record<string, unknown>, idx: number): SubModule {
+  const name = (bundle.name as string) || `Module ${idx + 1}`;
+  const vertical = (bundle.vertical as string) || "General";
+  const rawBites = (bundle.nanoBites as Array<Record<string, unknown>>) || [];
+  const nanoBites: NanoBiteSpec[] = rawBites.map((nb, i) => ({
+    id: (nb.id as string) || `nb-${i}`,
+    screen: pickScreen(nb),
+    order: i,
+    task: nb.task as string | undefined,
+    microElement: nb.microElement as string | undefined,
+    valueChainStage: nb.valueChainStage as string | undefined,
+    cadence: nb.cadence as string | undefined,
+    requiresTier: nb.requiresTier as string | undefined,
+  }));
+  return {
+    id: slugify(`${vertical}-${name}`),
+    label: name,
+    description: `${vertical} · ${nanoBites.length} Nano-Bites`,
+    industry: `${vertical} · ${name}`,
+    nanoBites,
+  };
+}
+
+function normalizePayload(code: string, payload: Record<string, unknown>): VerticalCarton {
+  const modules = (payload.modules as Record<string, unknown>) || payload;
+  const bundles = (modules.bundles as Array<Record<string, unknown>>) || [];
+  const subModules = bundles.map(normalizeBundle).filter((b) => b.nanoBites.length > 0);
+  const industry =
+    subModules[0]?.industry?.split(" · ")[0] ||
+    (payload.vertical as string) ||
+    "Sovereign Vertical";
+  return { provisioningCode: code, industry, subModules, raw: payload };
+}
+
+export async function fetchProvisioningBlueprint(
+  code: string,
+): Promise<VerticalCarton | null> {
   const trimmed = code.trim().toUpperCase();
-  const carton = REGISTRY.find((c) => c.provisioningCode.toUpperCase() === trimmed) ?? null;
-  console.log(
-    `[REGISTRY_LOOKUP]: END - ${carton ? `matched ${carton.provisioningCode}` : "no match"}`,
+  console.log(`[DATABASE_HANDSHAKE]: START - Requesting manifest for code ${trimmed}`);
+  const { data, error } = await supabase
+    .from("device_provisioning_blueprints")
+    .select("code, payload")
+    .ilike("code", trimmed)
+    .maybeSingle();
+
+  if (error) {
+    console.log(`[DATABASE_HANDSHAKE]: END - error ${error.message}`);
+    return null;
+  }
+  if (!data) {
+    console.log(`[DATABASE_HANDSHAKE]: END - no manifest for ${trimmed}`);
+    return null;
+  }
+  console.log(`[DATABASE_HANDSHAKE]: END - Success. JSON payload retrieved.`);
+  const carton = normalizePayload(
+    data.code as string,
+    (data.payload as Record<string, unknown>) || {},
   );
+  console.log(
+    `[OS_HYDRATION]: START - Analyzing screenTags for sidebar generation (${carton.subModules.length} sub-modules).`,
+  );
+  console.log(`[OS_HYDRATION]: END - Carton normalized.`);
   return carton;
 }
