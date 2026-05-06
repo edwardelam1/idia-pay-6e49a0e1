@@ -1,26 +1,26 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { LiquidOS } from "@/lib/idia/LiquidOS";
 
 export const Route = createFileRoute("/")({
+  head: () => ({
+    meta: [
+      { title: "IDIA Pay · LiquidOS" },
+      {
+        name: "description",
+        content:
+          "IDIA Pay LiquidOS — a hydrating shell for sovereign, dual-rail commerce. Enter a Hub provisioning code to hydrate your industry workspace.",
+      },
+      { property: "og:title", content: "IDIA Pay · LiquidOS" },
+      {
+        property: "og:description",
+        content:
+          "Sovereign, dual-rail (USD + USDC) commerce OS that hydrates from The Hub.",
+      },
+    ],
+  }),
   component: Index,
 });
 
-// IMPORTANT: Replace this placeholder. For sites with multiple pages (About, Services, Contact, etc.),
-// create separate route files (about.tsx, services.tsx, contact.tsx) — don't put all pages in this file.
-function PlaceholderIndex() {
-  return (
-    <div
-      className="flex min-h-screen items-center justify-center"
-      style={{ backgroundColor: "#fcfbf8" }}
-    >
-      <img
-        data-lovable-blank-page-placeholder="REMOVE_THIS"
-        src="https://cdn.gpteng.co/blank-app-v1.svg"
-        alt="Your app will live here!"
-      />
-    </div>
-  );
-}
-
 function Index() {
-  return <PlaceholderIndex />;
+  return <LiquidOS />;
 }
