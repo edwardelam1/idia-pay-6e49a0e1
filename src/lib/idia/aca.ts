@@ -31,7 +31,7 @@ export async function withACA(
     veracityScore: 1.0,
     payload,
   };
-  await dispatchToSynapseController(artifact);
+  dispatchToSynapseController(artifact);
   console.log(`[ACA_WRAP]: END - artifact issued`);
   return artifact;
 }
