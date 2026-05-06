@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import idiaLogo from "@/assets/idia-logo.png";
 import payLogo from "@/assets/idia-pay-logo.jpg";
 import {
@@ -7,8 +7,13 @@ import {
   type SubModule,
   type VerticalCarton,
 } from "@/lib/idia/registry";
-import { NANO_BITE_REGISTRY } from "@/lib/idia/nano-bites";
-import { withACA } from "@/lib/idia/aca";
+import { withACA, calculateRoyalty, DATA_ROYALTY_RATE } from "@/lib/idia/aca";
+import {
+  recordExecution,
+  getExecutionsFor,
+  subscribeExecutions,
+  type ExecutionRecord,
+} from "@/lib/idia/executions";
 
 type Phase =
   | { kind: "provisioning" }
@@ -290,47 +295,86 @@ function NanoBiteRenderer({
   carton: VerticalCarton;
   subModule: SubModule;
 }): ReactNode {
-  // 1. Try direct id match
-  const Direct = NANO_BITE_REGISTRY[spec.id];
-  if (Direct) {
-    return Direct({
-      InstanceID: `${subModule.id}::${spec.id}`,
-      IndustryContext: subModule.industry,
-      ActionCallback: (a, p) => console.log(`[ACTION:${spec.id}] ${a}`, p),
-    });
-  }
-  // 2. Heuristic mapping by microElement / id keywords for POS / Billing screens
-  const blob = `${spec.id} ${spec.microElement ?? ""}`.toLowerCase();
-  let mapped: string | null = null;
-  if (blob.includes("pos") || blob.includes("payment_processing") || blob.includes("checkout")) mapped = "nb-pos-terminal";
-  else if (blob.includes("billing") || blob.includes("folio") || blob.includes("invoice")) mapped = "nb-hosp-billing";
-  else if (blob.includes("inventory") || blob.includes("stock")) mapped = "nb-stock-check";
-  else if (blob.includes("logistics") || blob.includes("dispatch") || blob.includes("delivery")) mapped = "nb-logistics-dispatch";
-  else if (blob.includes("employee") || blob.includes("staff") || blob.includes("team") || blob.includes("timesheet")) mapped = "nb-employee-id";
-  if (mapped && NANO_BITE_REGISTRY[mapped]) {
-    return NANO_BITE_REGISTRY[mapped]({
-      InstanceID: `${subModule.id}::${spec.id}`,
-      IndustryContext: `${subModule.industry} · ${spec.microElement ?? spec.screen}`,
-      ActionCallback: (a, p) => console.log(`[ACTION:${spec.id}] ${a}`, p),
-    });
-  }
-  // 3. Generic dynamic Nano-Bite card from manifest
-  return <DynamicNanoBite spec={spec} subModuleLabel={subModule.label} cartonCode={carton.provisioningCode} />;
+  // One spec → one card. No duplicates, no heuristic mapping to mock components.
+  return (
+    <DynamicNanoBite
+      spec={spec}
+      subModuleLabel={subModule.label}
+      subModuleId={subModule.id}
+      cartonCode={carton.provisioningCode}
+    />
+  );
+}
+
+function isPaymentSpec(spec: NanoBiteSpec): boolean {
+  const blob = `${spec.id} ${spec.microElement ?? ""} ${spec.task ?? ""}`.toLowerCase();
+  return /(pos|payment|checkout|charge|tender|nfc|tap)/.test(blob);
+}
+
+function prettyTitle(spec: NanoBiteSpec): string {
+  const tail = spec.id.split(/[.\-_/]/).pop() ?? spec.id;
+  return tail
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function DynamicNanoBite({
   spec,
   subModuleLabel,
+  subModuleId,
+  cartonCode,
 }: {
   spec: NanoBiteSpec;
   subModuleLabel: string;
+  subModuleId: string;
   cartonCode: string;
 }) {
+  const isPayment = isPaymentSpec(spec);
+  const [history, setHistory] = useState<ExecutionRecord[]>(() =>
+    getExecutionsFor(spec.id, cartonCode),
+  );
+  const [input, setInput] = useState("");
+  const [rail, setRail] = useState<"USD" | "USDC">("USD");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    return subscribeExecutions(() =>
+      setHistory(getExecutionsFor(spec.id, cartonCode)),
+    );
+  }, [spec.id, cartonCode]);
+
   async function execute() {
-    console.log(`[NB_DYNAMIC:${spec.id}]: START`);
-    await withACA("nanobite.execute", { id: spec.id, task: spec.task });
-    console.log(`[NB_DYNAMIC:${spec.id}]: END`);
+    setBusy(true);
+    try {
+      const payload: Record<string, unknown> = {
+        microElement: spec.microElement,
+        screen: spec.screen,
+      };
+      if (isPayment) {
+        const amount = parseFloat(input || "0") || 0;
+        payload.amount = amount;
+        payload.rail = rail;
+        payload.royalty = calculateRoyalty(amount);
+      } else if (input.trim()) {
+        payload.input = input.trim();
+      }
+      const artifact = await withACA(`nanobite.${spec.id}`, payload);
+      recordExecution({
+        cartonCode,
+        subModuleId,
+        nanoBiteId: spec.id,
+        screen: spec.screen,
+        action: isPayment ? "pos.charge" : "execute",
+        payload: { ...payload, acaTimestamp: artifact.timestamp },
+      });
+      setInput("");
+    } finally {
+      setBusy(false);
+    }
   }
+
+  const last = history[history.length - 1];
+
   return (
     <div
       className="bg-white p-6 flex flex-col gap-4"
@@ -344,23 +388,90 @@ function DynamicNanoBite({
         <p className="text-[10px] font-semibold tracking-[0.14em] uppercase text-muted-foreground">
           {spec.microElement ?? spec.screen} · {subModuleLabel}
         </p>
-        <h3 className="text-[17px] font-semibold tracking-tight mt-1">{spec.id.split(".").pop()?.replace(/_/g, " ")}</h3>
+        <h3 className="text-[17px] font-semibold tracking-tight mt-1">
+          {prettyTitle(spec)}
+        </h3>
       </div>
-      {spec.task && <p className="text-[14px] text-foreground/80 leading-relaxed">{spec.task}</p>}
+      {spec.task && (
+        <p className="text-[14px] text-foreground/80 leading-relaxed">{spec.task}</p>
+      )}
       <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
         {spec.cadence && <span className="px-2 py-1 bg-secondary rounded-full">{spec.cadence}</span>}
-        {spec.requiresTier && <span className="px-2 py-1 bg-secondary rounded-full">{spec.requiresTier}</span>}
+        {spec.requiresTier && (
+          <span className="px-2 py-1 bg-secondary rounded-full">{spec.requiresTier}</span>
+        )}
         {spec.valueChainStage && (
           <span className="px-2 py-1 bg-secondary rounded-full">{spec.valueChainStage}</span>
         )}
       </div>
+
+      {isPayment ? (
+        <>
+          <div className="flex gap-2">
+            {(["USD", "USDC"] as const).map((r) => (
+              <button
+                key={r}
+                onClick={() => setRail(r)}
+                className={`flex-1 h-10 text-[13px] font-semibold transition-all ${
+                  rail === r ? "text-white" : "bg-secondary text-foreground"
+                }`}
+                style={{
+                  borderRadius: 14,
+                  ...(rail === r ? { background: "var(--idia-gradient)" } : {}),
+                }}
+              >
+                {r === "USD" ? "USD · Fiat" : "USDC · Digital"}
+              </button>
+            ))}
+          </div>
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value.replace(/[^0-9.]/g, ""))}
+            placeholder="0.00"
+            inputMode="decimal"
+            className="h-12 px-4 text-[20px] font-semibold bg-secondary focus:outline-none focus:ring-2 focus:ring-ring"
+            style={{ borderRadius: 18 }}
+          />
+          <div className="flex items-center justify-between text-[12px] text-muted-foreground">
+            <span>Direct Data Royalty</span>
+            <span className="font-medium text-foreground">
+              {(DATA_ROYALTY_RATE * 100).toFixed(2)}% ·{" "}
+              {calculateRoyalty(parseFloat(input || "0") || 0)}
+            </span>
+          </div>
+        </>
+      ) : (
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Reference, ID, or note (optional)"
+          className="h-11 px-4 text-[14px] bg-secondary focus:outline-none focus:ring-2 focus:ring-ring"
+          style={{ borderRadius: 14 }}
+        />
+      )}
+
       <button
         onClick={execute}
-        className="h-11 text-white text-[14px] font-semibold mt-2"
+        disabled={busy}
+        className="h-11 text-white text-[14px] font-semibold mt-1 disabled:opacity-60"
         style={{ borderRadius: 18, background: "var(--idia-gradient)" }}
       >
-        Execute
+        {busy ? "Dispatching…" : isPayment ? "Charge & Settle" : "Execute"}
       </button>
+
+      <div className="flex items-center justify-between text-[11px] text-muted-foreground pt-1 border-t border-border">
+        <span>{history.length} run{history.length === 1 ? "" : "s"}</span>
+        {last && (
+          <span>
+            Last: {new Date(last.createdAt).toLocaleTimeString()}
+            {last.payload && "amount" in last.payload
+              ? ` · ${(last.payload as { rail?: string }).rail ?? ""} ${
+                  (last.payload as { amount?: number }).amount ?? ""
+                }`
+              : ""}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
