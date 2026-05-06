@@ -1,8 +1,9 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import idiaLogo from "@/assets/idia-logo.png";
 import payLogo from "@/assets/idia-pay-logo.jpg";
 import {
-  resolveProvisioningCode,
+  fetchProvisioningBlueprint,
+  type NanoBiteSpec,
   type SubModule,
   type VerticalCarton,
 } from "@/lib/idia/registry";
@@ -12,8 +13,7 @@ import { withACA } from "@/lib/idia/aca";
 type Phase =
   | { kind: "provisioning" }
   | { kind: "selection"; carton: VerticalCarton }
-  | { kind: "operational"; carton: VerticalCarton; subModule: SubModule }
-  | { kind: "sovereign-error"; reason: string };
+  | { kind: "operational"; carton: VerticalCarton; subModule: SubModule };
 
 const SURFACE_STYLE: React.CSSProperties = {
   background: "rgba(255,255,255,0.94)",
@@ -26,46 +26,45 @@ export function LiquidOS() {
   const [activeScreen, setActiveScreen] = useState<string | null>(null);
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   async function handleProvision(e: FormEvent) {
     e.preventDefault();
-    console.log(`[PROVISIONING]: START - code="${code}"`);
     setError(null);
+    setLoading(true);
     await withACA("provisioning.attempt", { code });
-    const carton = resolveProvisioningCode(code);
-    if (!carton) {
-      console.log(`[PROVISIONING]: END - no carton for "${code}"`);
-      setError(`No vertical carton matches "${code}".`);
+    const carton = await fetchProvisioningBlueprint(code);
+    setLoading(false);
+    if (!carton || carton.subModules.length === 0) {
+      setError(`No manifest found for "${code}". Verify the Hub provisioning code.`);
       return;
     }
     if (carton.subModules.length === 1) {
       const sm = carton.subModules[0];
       const tags = uniqueScreens(sm);
+      console.log(`[OS_HYDRATION]: START - Sidebar build (single sub-module ${sm.id}).`);
       setActiveScreen(tags[0] ?? null);
       setPhase({ kind: "operational", carton, subModule: sm });
-      console.log(`[PROVISIONING]: END - direct hydration ${sm.id}`);
+      console.log(`[OS_HYDRATION]: END - Sidebar built with ${tags.length} operational screens.`);
       return;
     }
     setPhase({ kind: "selection", carton });
-    console.log(`[PROVISIONING]: END - awaiting selection`);
   }
 
   async function chooseSubModule(sm: SubModule, carton: VerticalCarton) {
-    console.log(`[SUBMODULE_SELECT]: START - ${sm.id}`);
     await withACA("submodule.select", { id: sm.id });
     const tags = uniqueScreens(sm);
+    console.log(`[OS_HYDRATION]: START - Sidebar build (${sm.id}).`);
     setActiveScreen(tags[0] ?? null);
     setPhase({ kind: "operational", carton, subModule: sm });
-    console.log(`[SUBMODULE_SELECT]: END - hydrated`);
+    console.log(`[OS_HYDRATION]: END - Sidebar built with ${tags.length} operational screens.`);
   }
 
   function reset() {
-    console.log("[OS_RESET]: START");
     setPhase({ kind: "provisioning" });
     setActiveScreen(null);
     setCode("");
     setError(null);
-    console.log("[OS_RESET]: END");
   }
 
   // ===== PROVISIONING =====
@@ -82,8 +81,9 @@ export function LiquidOS() {
               autoFocus
               value={code}
               onChange={(e) => setCode(e.target.value)}
-              placeholder="IDIA-HOSP-001"
-              className="h-14 px-5 text-center text-[18px] font-semibold tracking-wide bg-white focus:outline-none focus:ring-2 focus:ring-ring"
+              placeholder="IDIA-XXXX-XXXX"
+              disabled={loading}
+              className="h-14 px-5 text-center text-[18px] font-semibold tracking-wide bg-white focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
               style={{
                 borderRadius: 18,
                 border: "1px solid #F2F2F7",
@@ -91,14 +91,25 @@ export function LiquidOS() {
               }}
             />
             <p className="text-[12px] text-muted-foreground text-center">
-              Press <kbd className="px-1.5 py-0.5 rounded bg-secondary font-mono">Enter</kbd> to hydrate the OS
+              {loading ? "Hydrating from The Hub…" : (
+                <>Press <kbd className="px-1.5 py-0.5 rounded bg-secondary font-mono">Enter</kbd> to hydrate the OS</>
+              )}
             </p>
             {error && (
-              <p className="text-[13px] text-destructive text-center">{error}</p>
+              <div
+                className="mt-2 p-4 text-center"
+                style={{
+                  borderRadius: 28,
+                  border: "1px solid #FF3B30",
+                  background: "rgba(255,59,48,0.04)",
+                }}
+              >
+                <p className="text-[11px] font-semibold tracking-[0.14em] uppercase" style={{ color: "#FF3B30" }}>
+                  Sovereign Error
+                </p>
+                <p className="text-[13px] mt-1 text-foreground">{error}</p>
+              </div>
             )}
-            <p className="text-[11px] text-muted-foreground text-center mt-4">
-              Try <code>IDIA-HOSP-001</code> or <code>IDIA-RETAIL-001</code>
-            </p>
           </form>
         </div>
       </div>
@@ -107,95 +118,114 @@ export function LiquidOS() {
 
   // ===== SELECTION =====
   if (phase.kind === "selection") {
+    // Looped scroll: duplicate list for seamless loop
+    const looped = [...phase.carton.subModules, ...phase.carton.subModules];
     return (
-      <div className="min-h-screen flex flex-col items-center px-6 py-16">
-        <div className="w-full max-w-3xl flex flex-col gap-8">
-          <div className="flex flex-col items-center gap-4">
-            <BrandMark compact />
-            <div className="text-center">
-              <p className="text-[12px] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
-                {phase.carton.industry}
-              </p>
-              <h1 className="text-[28px] font-semibold tracking-tight mt-1">
-                Select a sub-module
-              </h1>
+      <div className="min-h-screen flex">
+        <aside
+          className="w-72 shrink-0 border-r border-border sticky top-0 h-screen flex flex-col"
+          style={SURFACE_STYLE}
+        >
+          <div className="p-5">
+            <div className="flex items-center gap-2">
+              <img src={payLogo} alt="IDIA Pay" className="h-9 w-9 rounded-[10px]" />
+              <div>
+                <p className="text-[14px] font-semibold leading-tight">IDIA Pay</p>
+                <p className="text-[11px] text-muted-foreground leading-tight">{phase.carton.industry}</p>
+              </div>
+            </div>
+            <p className="mt-5 text-[10px] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+              Sub-modules
+            </p>
+          </div>
+          <div className="flex-1 overflow-hidden relative group">
+            <div className="flex flex-col gap-2 px-4 pb-4 idia-loop-scroll group-hover:[animation-play-state:paused]">
+              {looped.map((sm, i) => (
+                <button
+                  key={`${sm.id}-${i}`}
+                  onClick={() => chooseSubModule(sm, phase.carton)}
+                  className="text-left bg-white p-3 transition-all hover:-translate-y-0.5"
+                  style={{
+                    borderRadius: 18,
+                    border: "1px solid #F2F2F7",
+                    boxShadow: "var(--idia-shadow-card)",
+                  }}
+                >
+                  <p className="text-[14px] font-semibold">{sm.label}</p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    {sm.nanoBites.length} Nano-Bites
+                  </p>
+                </button>
+              ))}
             </div>
           </div>
-          <div className="grid sm:grid-cols-2 gap-4">
-            {phase.carton.subModules.map((sm) => (
-              <button
-                key={sm.id}
-                onClick={() => chooseSubModule(sm, phase.carton)}
-                className="text-left bg-white p-6 transition-all hover:-translate-y-0.5"
-                style={{
-                  borderRadius: 28,
-                  border: "1px solid #F2F2F7",
-                  boxShadow: "var(--idia-shadow-card)",
-                }}
-              >
-                <p className="text-[12px] font-semibold tracking-[0.14em] uppercase"
-                   style={{
-                     background: "var(--idia-gradient)",
-                     WebkitBackgroundClip: "text",
-                     WebkitTextFillColor: "transparent",
-                   }}>
-                  {sm.industry}
-                </p>
-                <h3 className="text-[20px] font-semibold mt-2">{sm.label}</h3>
-                <p className="text-[14px] text-muted-foreground mt-1">{sm.description}</p>
-                <p className="text-[12px] text-muted-foreground mt-4">
-                  {sm.nanoBites.length} Nano-Bites · {uniqueScreens(sm).length} Screens
-                </p>
-              </button>
-            ))}
+          <div className="p-4 border-t border-border">
+            <button
+              onClick={reset}
+              className="text-[12px] text-muted-foreground hover:text-foreground"
+            >
+              ↻ End session
+            </button>
           </div>
-          <button
-            onClick={reset}
-            className="text-[13px] text-muted-foreground hover:text-foreground transition-colors mt-2 self-center"
+        </aside>
+        <main className="flex-1 flex items-center justify-center px-10">
+          <div
+            className="max-w-lg w-full bg-white p-10 text-center"
+            style={{
+              borderRadius: 28,
+              border: "1px solid #F2F2F7",
+              boxShadow: "var(--idia-shadow-card)",
+            }}
           >
-            ← Re-enter provisioning code
-          </button>
-        </div>
+            <p className="text-[12px] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+              {phase.carton.industry}
+            </p>
+            <h1 className="text-[28px] font-semibold tracking-tight mt-2">
+              Select a Carton
+            </h1>
+            <p className="text-[14px] text-muted-foreground mt-3">
+              {phase.carton.subModules.length} sub-modules are available under this manifest.
+              Choose one from the Liquid Sidebar to hydrate the operational stage.
+            </p>
+          </div>
+        </main>
       </div>
     );
   }
 
   // ===== OPERATIONAL =====
-  if (phase.kind === "operational") {
-    const screens = uniqueScreens(phase.subModule);
-    const current = activeScreen ?? screens[0];
-    const bites = phase.subModule.nanoBites
-      .filter((nb) => nb.screen === current)
-      .sort((a, b) => a.order - b.order);
+  const screens = uniqueScreens(phase.subModule);
+  const current = activeScreen ?? screens[0];
+  const bites = phase.subModule.nanoBites
+    .filter((nb) => nb.screen === current)
+    .sort((a, b) => a.order - b.order);
 
-    return (
-      <div className="min-h-screen flex">
-        {/* Liquid Sidebar */}
-        <aside
-          className="w-64 shrink-0 border-r border-border p-5 flex flex-col gap-2 sticky top-0 h-screen"
-          style={SURFACE_STYLE}
-        >
-          <div className="flex items-center gap-2 px-2 py-3">
-            <img src={payLogo} alt="IDIA Pay" className="h-9 w-9 rounded-[10px]" />
-            <div>
-              <p className="text-[14px] font-semibold leading-tight">IDIA Pay</p>
-              <p className="text-[11px] text-muted-foreground leading-tight">{phase.subModule.label}</p>
-            </div>
+  return (
+    <div className="min-h-screen flex">
+      <aside
+        className="w-64 shrink-0 border-r border-border p-5 flex flex-col gap-2 sticky top-0 h-screen"
+        style={SURFACE_STYLE}
+      >
+        <div className="flex items-center gap-2 px-2 py-3">
+          <img src={payLogo} alt="IDIA Pay" className="h-9 w-9 rounded-[10px]" />
+          <div>
+            <p className="text-[14px] font-semibold leading-tight">IDIA Pay</p>
+            <p className="text-[11px] text-muted-foreground leading-tight">{phase.subModule.label}</p>
           </div>
-          <div className="h-px bg-border my-2" />
-          <p className="text-[10px] font-semibold tracking-[0.14em] text-muted-foreground uppercase px-2">
-            Screens
-          </p>
+        </div>
+        <div className="h-px bg-border my-2" />
+        <p className="text-[10px] font-semibold tracking-[0.14em] text-muted-foreground uppercase px-2">
+          Screens
+        </p>
+        <div className="flex-1 overflow-y-auto flex flex-col gap-1.5">
           {screens.map((s) => {
             const active = s === current;
             return (
               <button
                 key={s}
                 onClick={() => {
-                  console.log(`[SIDEBAR_NAV]: START - to ${s}`);
                   setActiveScreen(s);
                   withACA("sidebar.navigate", { screen: s });
-                  console.log(`[SIDEBAR_NAV]: END`);
                 }}
                 className={`text-left h-10 px-3 text-[13px] font-medium transition-all ${
                   active ? "text-white shadow-sm" : "text-foreground hover:bg-secondary"
@@ -209,69 +239,130 @@ export function LiquidOS() {
               </button>
             );
           })}
-          <div className="mt-auto flex flex-col gap-2 px-2 pb-1">
-            <div className="h-px bg-border" />
-            <button
-              onClick={reset}
-              className="text-[12px] text-muted-foreground hover:text-foreground text-left"
-            >
-              ↻ End session
-            </button>
-            <p className="text-[10px] text-muted-foreground">
-              {phase.carton.provisioningCode}
+        </div>
+        <div className="mt-auto flex flex-col gap-2 px-2 pb-1">
+          <div className="h-px bg-border" />
+          <button
+            onClick={reset}
+            className="text-[12px] text-muted-foreground hover:text-foreground text-left"
+          >
+            ↻ End session
+          </button>
+          <p className="text-[10px] text-muted-foreground">
+            {phase.carton.provisioningCode}
+          </p>
+        </div>
+      </aside>
+
+      <main className="flex-1 px-10 py-10">
+        <header className="flex items-center justify-between mb-8">
+          <div>
+            <p className="text-[12px] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+              {phase.subModule.industry}
             </p>
+            <h1 className="text-[32px] font-semibold tracking-tight mt-1">{current}</h1>
           </div>
-        </aside>
-
-        {/* Main Stage */}
-        <main className="flex-1 px-10 py-10">
-          <header className="flex items-center justify-between mb-8">
-            <div>
-              <p className="text-[12px] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
-                {phase.subModule.industry}
-              </p>
-              <h1 className="text-[32px] font-semibold tracking-tight mt-1">{current}</h1>
-            </div>
-            <div
-              className="px-4 h-11 flex items-center gap-2 text-[12px] text-muted-foreground"
-              style={{ ...SURFACE_STYLE, borderRadius: 18, border: "1px solid #F2F2F7" }}
-            >
-              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-              Synapse Controller live
-            </div>
-          </header>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {bites.map((nb) => {
-              const Comp = NANO_BITE_REGISTRY[nb.id];
-              if (!Comp) {
-                console.log(`[HYDRATION_MISS]: ${nb.id} not in registry`);
-                return (
-                  <SovereignMissingBite key={nb.id} id={nb.id} />
-                );
-              }
-              return (
-                <div key={nb.id}>
-                  {Comp({
-                    InstanceID: `${phase.subModule.id}::${nb.id}`,
-                    IndustryContext: phase.subModule.industry,
-                    ActionCallback: (action, payload) => {
-                      console.log(
-                        `[ACTION_CALLBACK]: ${nb.id} action="${action}"`,
-                        payload,
-                      );
-                    },
-                  })}
-                </div>
-              );
-            })}
+          <div
+            className="px-4 h-11 flex items-center gap-2 text-[12px] text-muted-foreground"
+            style={{ ...SURFACE_STYLE, borderRadius: 18, border: "1px solid #F2F2F7" }}
+          >
+            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+            Synapse Controller live
           </div>
-        </main>
-      </div>
-    );
+        </header>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {bites.map((nb) => (
+            <NanoBiteRenderer key={nb.id} spec={nb} carton={phase.carton} subModule={phase.subModule} />
+          ))}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function NanoBiteRenderer({
+  spec,
+  carton,
+  subModule,
+}: {
+  spec: NanoBiteSpec;
+  carton: VerticalCarton;
+  subModule: SubModule;
+}): ReactNode {
+  // 1. Try direct id match
+  const Direct = NANO_BITE_REGISTRY[spec.id];
+  if (Direct) {
+    return Direct({
+      InstanceID: `${subModule.id}::${spec.id}`,
+      IndustryContext: subModule.industry,
+      ActionCallback: (a, p) => console.log(`[ACTION:${spec.id}] ${a}`, p),
+    });
   }
+  // 2. Heuristic mapping by microElement / id keywords for POS / Billing screens
+  const blob = `${spec.id} ${spec.microElement ?? ""}`.toLowerCase();
+  let mapped: string | null = null;
+  if (blob.includes("pos") || blob.includes("payment_processing") || blob.includes("checkout")) mapped = "nb-pos-terminal";
+  else if (blob.includes("billing") || blob.includes("folio") || blob.includes("invoice")) mapped = "nb-hosp-billing";
+  else if (blob.includes("inventory") || blob.includes("stock")) mapped = "nb-stock-check";
+  else if (blob.includes("logistics") || blob.includes("dispatch") || blob.includes("delivery")) mapped = "nb-logistics-dispatch";
+  else if (blob.includes("employee") || blob.includes("staff") || blob.includes("team") || blob.includes("timesheet")) mapped = "nb-employee-id";
+  if (mapped && NANO_BITE_REGISTRY[mapped]) {
+    return NANO_BITE_REGISTRY[mapped]({
+      InstanceID: `${subModule.id}::${spec.id}`,
+      IndustryContext: `${subModule.industry} · ${spec.microElement ?? spec.screen}`,
+      ActionCallback: (a, p) => console.log(`[ACTION:${spec.id}] ${a}`, p),
+    });
+  }
+  // 3. Generic dynamic Nano-Bite card from manifest
+  return <DynamicNanoBite spec={spec} subModuleLabel={subModule.label} cartonCode={carton.provisioningCode} />;
+}
 
-  return <SovereignError reason={phase.kind === "sovereign-error" ? phase.reason : "Unknown"} onReset={reset} />;
+function DynamicNanoBite({
+  spec,
+  subModuleLabel,
+}: {
+  spec: NanoBiteSpec;
+  subModuleLabel: string;
+  cartonCode: string;
+}) {
+  async function execute() {
+    console.log(`[NB_DYNAMIC:${spec.id}]: START`);
+    await withACA("nanobite.execute", { id: spec.id, task: spec.task });
+    console.log(`[NB_DYNAMIC:${spec.id}]: END`);
+  }
+  return (
+    <div
+      className="bg-white p-6 flex flex-col gap-4"
+      style={{
+        borderRadius: 28,
+        border: "1px solid #F2F2F7",
+        boxShadow: "var(--idia-shadow-card)",
+      }}
+    >
+      <div>
+        <p className="text-[10px] font-semibold tracking-[0.14em] uppercase text-muted-foreground">
+          {spec.microElement ?? spec.screen} · {subModuleLabel}
+        </p>
+        <h3 className="text-[17px] font-semibold tracking-tight mt-1">{spec.id.split(".").pop()?.replace(/_/g, " ")}</h3>
+      </div>
+      {spec.task && <p className="text-[14px] text-foreground/80 leading-relaxed">{spec.task}</p>}
+      <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+        {spec.cadence && <span className="px-2 py-1 bg-secondary rounded-full">{spec.cadence}</span>}
+        {spec.requiresTier && <span className="px-2 py-1 bg-secondary rounded-full">{spec.requiresTier}</span>}
+        {spec.valueChainStage && (
+          <span className="px-2 py-1 bg-secondary rounded-full">{spec.valueChainStage}</span>
+        )}
+      </div>
+      <button
+        onClick={execute}
+        className="h-11 text-white text-[14px] font-semibold mt-2"
+        style={{ borderRadius: 18, background: "var(--idia-gradient)" }}
+      >
+        Execute
+      </button>
+    </div>
+  );
 }
 
 function uniqueScreens(sm: SubModule): string[] {
@@ -304,47 +395,6 @@ function BrandMark({ compact = false }: { compact?: boolean }) {
           Hydrating Shell · awaiting Hub instructions
         </p>
       )}
-    </div>
-  );
-}
-
-function SovereignMissingBite({ id }: { id: string }) {
-  return (
-    <div
-      className="bg-white p-6"
-      style={{ borderRadius: 24, border: "1px solid #F2F2F7", boxShadow: "var(--idia-shadow-card)" }}
-    >
-      <p className="text-[11px] font-semibold tracking-[0.14em] uppercase text-destructive">
-        Sovereign Error · Unmapped Nano-Bite
-      </p>
-      <p className="text-[14px] mt-2">
-        No component registered for <code className="font-mono">{id}</code>. The Hub must publish a
-        mapping before this Nano-Bite can hydrate.
-      </p>
-    </div>
-  );
-}
-
-function SovereignError({ reason, onReset }: { reason: string; onReset: () => void }) {
-  return (
-    <div className="min-h-screen flex items-center justify-center px-6">
-      <div
-        className="max-w-md w-full bg-white p-8 text-center"
-        style={{ borderRadius: 28, border: "1px solid #F2F2F7", boxShadow: "var(--idia-shadow-card)" }}
-      >
-        <p className="text-[11px] font-semibold tracking-[0.14em] uppercase text-destructive">
-          Sovereign Error
-        </p>
-        <h2 className="text-[22px] font-semibold mt-3">Hydration halted</h2>
-        <p className="text-[14px] text-muted-foreground mt-2">{reason}</p>
-        <button
-          onClick={onReset}
-          className="mt-6 h-11 px-5 text-white text-[14px] font-semibold"
-          style={{ borderRadius: 18, background: "var(--idia-gradient)" }}
-        >
-          Re-enter provisioning code
-        </button>
-      </div>
     </div>
   );
 }
