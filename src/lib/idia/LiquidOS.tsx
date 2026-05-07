@@ -226,10 +226,7 @@ export function LiquidOS() {
             return (
               <button
                 key={s}
-                onClick={() => {
-                  setActiveScreen(s);
-                  withACA("sidebar.navigate", { screen: s });
-                }}
+                onClick={() => setActiveScreen(s)}
                 className={`text-left h-10 px-3 text-[13px] font-medium transition-all ${
                   active ? "text-white shadow-sm" : "text-foreground hover:bg-secondary"
                 }`}
