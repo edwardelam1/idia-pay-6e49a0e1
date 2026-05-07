@@ -97,9 +97,12 @@ export function LiquidOS() {
     
     try {
       console.log(`[INFO] executeProvisioning: Fetching provisioning blueprint.`);
-      const carton = await fetchProvisioningBlueprint(provisionCode);
       
-      if (!carton || carton.subModules.length === 0) {
+      // THE DIAGNOSTIC LOG: See exactly what the registry returns
+      const carton = await fetchProvisioningBlueprint(provisionCode);
+      console.log(`[DIAGNOSTIC]: Payload returned from registry in this environment:`, carton);
+      
+      if (!carton || !carton.subModules || carton.subModules.length === 0) {
         console.warn(`[WARN] executeProvisioning: HALT - No manifest found for code: ${provisionCode}`);
         setError(`No manifest found for "${provisionCode}". Verify the Hub provisioning code.`);
         localStorage.removeItem(PROVISION_KEY); 
@@ -108,6 +111,7 @@ export function LiquidOS() {
       }
 
       console.log(`[INFO] executeProvisioning: Manifest retrieved with ${carton.subModules.length} submodules.`);
+      // ... rest of the function stays exactly the same
       
       localStorage.setItem(PROVISION_KEY, provisionCode);
       console.log(`[SESSION_DATA]: Hardware anchor secured in LocalStorage.`);
