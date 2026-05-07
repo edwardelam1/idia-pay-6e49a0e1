@@ -3065,6 +3065,45 @@ export type Database = {
         }
         Relationships: []
       }
+      hub_notifications: {
+        Row: {
+          body: string | null
+          category: string
+          created_at: string
+          id: string
+          link: string | null
+          metadata: Json
+          read_at: string | null
+          severity: string
+          title: string
+          user_id: string
+        }
+        Insert: {
+          body?: string | null
+          category?: string
+          created_at?: string
+          id?: string
+          link?: string | null
+          metadata?: Json
+          read_at?: string | null
+          severity?: string
+          title: string
+          user_id: string
+        }
+        Update: {
+          body?: string | null
+          category?: string
+          created_at?: string
+          id?: string
+          link?: string | null
+          metadata?: Json
+          read_at?: string | null
+          severity?: string
+          title?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       idia_life_accounts: {
         Row: {
           created_at: string | null
@@ -6804,6 +6843,72 @@ export type Database = {
           to_address?: string
           tx_hash?: string
           wallet_user_id?: string | null
+        }
+        Relationships: []
+      }
+      usdc_payments: {
+        Row: {
+          amount_raw: string
+          amount_usdc: number
+          block_number: number | null
+          chain_id: number
+          created_at: string | null
+          error_message: string | null
+          id: string
+          merchant_id: string | null
+          merchant_name: string | null
+          network: string
+          nonce_used: string | null
+          recipient_address: string
+          reference: string | null
+          relayed_by: string | null
+          sender_address: string
+          settled_at: string | null
+          status: string
+          tx_hash: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          amount_raw: string
+          amount_usdc: number
+          block_number?: number | null
+          chain_id?: number
+          created_at?: string | null
+          error_message?: string | null
+          id?: string
+          merchant_id?: string | null
+          merchant_name?: string | null
+          network?: string
+          nonce_used?: string | null
+          recipient_address: string
+          reference?: string | null
+          relayed_by?: string | null
+          sender_address: string
+          settled_at?: string | null
+          status?: string
+          tx_hash?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          amount_raw?: string
+          amount_usdc?: number
+          block_number?: number | null
+          chain_id?: number
+          created_at?: string | null
+          error_message?: string | null
+          id?: string
+          merchant_id?: string | null
+          merchant_name?: string | null
+          network?: string
+          nonce_used?: string | null
+          recipient_address?: string
+          reference?: string | null
+          relayed_by?: string | null
+          sender_address?: string
+          settled_at?: string | null
+          status?: string
+          tx_hash?: string | null
+          updated_at?: string | null
         }
         Relationships: []
       }
