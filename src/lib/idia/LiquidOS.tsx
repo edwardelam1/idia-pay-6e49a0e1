@@ -14,6 +14,21 @@ import {
   type ExecutionRecord,
 } from "@/lib/idia/executions";
 
+// --- PHYSICAL ATOM IMPORTS ---
+import DailyPrepList from "@/components/nanobites/hospitality/DailyPrepList";
+import HealthPermitLog from "@/components/nanobites/hospitality/HealthPermitLog";
+// THE FIX: Import as Default Export to match the newly created SovereignWrapper file
+import SovereignWrapper from "@/components/sovereign/SovereignWrapper";
+
+/**
+ * PHYSICAL_LEGO_BRIDGE
+ * Maps Taxonomy IDs to high-fidelity UI components.
+ */
+const PHYSICAL_LEGO_BRIDGE: Record<string, any> = {
+  "hosp.ft.ops.prep": DailyPrepList,
+  "hosp.ft.infra.health": HealthPermitLog,
+};
+
 type Phase =
   | { kind: "provisioning" }
   | { kind: "selection"; carton: VerticalCarton }
@@ -34,40 +49,52 @@ export function LiquidOS() {
 
   async function handleProvision(e: FormEvent) {
     e.preventDefault();
+    console.log("[LIQUID_OS]: START - Provisioning sequence for code:", code);
     setError(null);
     setLoading(true);
     
-    const carton = await fetchProvisioningBlueprint(code);
-    setLoading(false);
-    if (!carton || carton.subModules.length === 0) {
-      setError(`No manifest found for "${code}". Verify the Hub provisioning code.`);
-      return;
+    try {
+      const carton = await fetchProvisioningBlueprint(code);
+      setLoading(false);
+      
+      if (!carton || carton.subModules.length === 0) {
+        console.error("[LIQUID_OS]: HALT - No manifest found.");
+        setError(`No manifest found for "${code}". Verify the Hub provisioning code.`);
+        return;
+      }
+
+      if (carton.subModules.length === 1) {
+        const sm = carton.subModules[0];
+        const tags = uniqueScreens(sm);
+        console.log(`[OS_HYDRATION]: Single sub-module optimization triggered for: ${sm.id}`);
+        setActiveScreen(tags[0] ?? null);
+        setPhase({ kind: "operational", carton, subModule: sm });
+      } else {
+        setPhase({ kind: "selection", carton });
+      }
+      console.log("[LIQUID_OS]: END - Hydration sequence successful.");
+    } catch (err: any) {
+      console.error("[LIQUID_OS]: ERROR - Provisioning failed:", err.message);
+      setError("System failure during manifest retrieval.");
+      setLoading(false);
     }
-    if (carton.subModules.length === 1) {
-      const sm = carton.subModules[0];
-      const tags = uniqueScreens(sm);
-      console.log(`[OS_HYDRATION]: START - Sidebar build (single sub-module ${sm.id}).`);
-      setActiveScreen(tags[0] ?? null);
-      setPhase({ kind: "operational", carton, subModule: sm });
-      console.log(`[OS_HYDRATION]: END - Sidebar built with ${tags.length} operational screens.`);
-      return;
-    }
-    setPhase({ kind: "selection", carton });
   }
 
   async function chooseSubModule(sm: SubModule, carton: VerticalCarton) {
+    console.log(`[NAV_EVENT]: START - Hydrating submodule stage: ${sm.id}`);
     const tags = uniqueScreens(sm);
-    console.log(`[OS_HYDRATION]: START - Sidebar build (${sm.id}).`);
     setActiveScreen(tags[0] ?? null);
     setPhase({ kind: "operational", carton, subModule: sm });
-    console.log(`[OS_HYDRATION]: END - Sidebar built with ${tags.length} operational screens.`);
+    console.log(`[NAV_EVENT]: END - Stage built with ${tags.length} screens.`);
   }
 
   function reset() {
+    console.log("[SYSTEM]: START - Initiating session purge.");
     setPhase({ kind: "provisioning" });
     setActiveScreen(null);
     setCode("");
     setError(null);
+    console.log("[SYSTEM]: END - Active memory cleared.");
   }
 
   // ===== PROVISIONING =====
@@ -119,12 +146,11 @@ export function LiquidOS() {
     );
   }
 
-  // ===== SELECTION =====
+  // ===== SELECTION (Top-Level Module Library) =====
   if (phase.kind === "selection") {
-    // Looped scroll: duplicate list for seamless loop
     const looped = [...phase.carton.subModules, ...phase.carton.subModules];
     return (
-      <div className="min-h-screen flex">
+      <div className="min-h-screen flex bg-[#FBFBFD]">
         <aside
           className="w-72 shrink-0 border-r border-border sticky top-0 h-screen flex flex-col"
           style={SURFACE_STYLE}
@@ -138,16 +164,17 @@ export function LiquidOS() {
               </div>
             </div>
             <p className="mt-5 text-[10px] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
-              Sub-modules
+              Sub-Modules
             </p>
           </div>
-          <div className="flex-1 overflow-hidden relative group">
+
+          <div className="flex-1 overflow-y-auto custom-scrollbar relative group">
             <div className="flex flex-col gap-2 px-4 pb-4 idia-loop-scroll group-hover:[animation-play-state:paused]">
               {looped.map((sm, i) => (
                 <button
                   key={`${sm.id}-${i}`}
                   onClick={() => chooseSubModule(sm, phase.carton)}
-                  className="text-left bg-white p-3 transition-all hover:-translate-y-0.5"
+                  className="text-left bg-white p-3 transition-all active:scale-[0.98] hover:border-blue-200"
                   style={{
                     borderRadius: 18,
                     border: "1px solid #F2F2F7",
@@ -162,12 +189,13 @@ export function LiquidOS() {
               ))}
             </div>
           </div>
+          
           <div className="p-4 border-t border-border">
             <button
               onClick={reset}
               className="text-[12px] text-muted-foreground hover:text-foreground"
             >
-              ↻ End session
+              ↻ End Session
             </button>
           </div>
         </aside>
@@ -184,11 +212,11 @@ export function LiquidOS() {
               {phase.carton.industry}
             </p>
             <h1 className="text-[28px] font-semibold tracking-tight mt-2">
-              Select a Carton
+              Select a Module
             </h1>
-            <p className="text-[14px] text-muted-foreground mt-3">
-              {phase.carton.subModules.length} sub-modules are available under this manifest.
-              Choose one from the Liquid Sidebar to hydrate the operational stage.
+            <p className="text-[14px] text-muted-foreground mt-3 leading-relaxed">
+              {phase.carton.subModules.length} operational units are available. 
+              Choose one from the Liquid Sidebar to hydrate the terminal.
             </p>
           </div>
         </main>
@@ -196,7 +224,7 @@ export function LiquidOS() {
     );
   }
 
-  // ===== OPERATIONAL =====
+  // ===== OPERATIONAL (Live Terminal Stage) =====
   const screens = uniqueScreens(phase.subModule);
   const current = activeScreen ?? screens[0];
   const bites = phase.subModule.nanoBites
@@ -216,18 +244,32 @@ export function LiquidOS() {
             <p className="text-[11px] text-muted-foreground leading-tight">{phase.subModule.label}</p>
           </div>
         </div>
+
+        {/* THE MODULE LIBRARY TRIGGER: Supports Zyyo case industri switching */}
+        <button
+          onClick={() => {
+            console.log("[NAV_EVENT]: Returning to Selection Grid.");
+            setPhase({ kind: "selection", carton: phase.carton });
+          }}
+          className="flex items-center gap-2 w-full px-3 py-2.5 mb-2 text-[11px] font-bold text-[#007AFF] uppercase tracking-[0.12em] bg-blue-50/40 hover:bg-blue-50 border border-blue-100/30 rounded-[14px] transition-all active:scale-[0.98]"
+        >
+          <span className="text-[16px]">⊞</span> Module Library
+        </button>
+
         <div className="h-px bg-border my-2" />
         <p className="text-[10px] font-semibold tracking-[0.14em] text-muted-foreground uppercase px-2">
           Screens
         </p>
-        <div className="flex-1 overflow-y-auto flex flex-col gap-1.5">
+
+        {/* THE SIDEBAR SCROLL FIX: Viewport constrained height */}
+        <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col gap-1.5 pr-1 max-h-[calc(100vh-280px)]">
           {screens.map((s) => {
             const active = s === current;
             return (
               <button
                 key={s}
                 onClick={() => setActiveScreen(s)}
-                className={`text-left h-10 px-3 text-[13px] font-medium transition-all ${
+                className={`text-left h-10 px-3 text-[13px] font-medium transition-all shrink-0 ${
                   active ? "text-white shadow-sm" : "text-foreground hover:bg-secondary"
                 }`}
                 style={{
@@ -240,13 +282,14 @@ export function LiquidOS() {
             );
           })}
         </div>
+
         <div className="mt-auto flex flex-col gap-2 px-2 pb-1">
           <div className="h-px bg-border" />
           <button
             onClick={reset}
             className="text-[12px] text-muted-foreground hover:text-foreground text-left"
           >
-            ↻ End session
+            ↻ End Session
           </button>
           <p className="text-[10px] text-muted-foreground">
             {phase.carton.provisioningCode}
@@ -254,7 +297,7 @@ export function LiquidOS() {
         </div>
       </aside>
 
-      <main className="flex-1 px-10 py-10">
+      <main className="flex-1 px-10 py-10 bg-[#FBFBFD] overflow-y-auto h-screen custom-scrollbar">
         <header className="flex items-center justify-between mb-8">
           <div>
             <p className="text-[12px] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
@@ -267,11 +310,11 @@ export function LiquidOS() {
             style={{ ...SURFACE_STYLE, borderRadius: 18, border: "1px solid #F2F2F7" }}
           >
             <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-            Synapse Controller live
+            Synapse Live
           </div>
         </header>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-20">
           {bites.map((nb) => (
             <NanoBiteRenderer key={nb.id} spec={nb} carton={phase.carton} subModule={phase.subModule} />
           ))}
@@ -290,7 +333,18 @@ function NanoBiteRenderer({
   carton: VerticalCarton;
   subModule: SubModule;
 }): ReactNode {
-  // One spec → one card. No duplicates, no heuristic mapping to mock components.
+  const Component = PHYSICAL_LEGO_BRIDGE[spec.id];
+
+  if (Component) {
+    console.log(`[PHYSICAL_BRIDGE]: START - Hydrating physical atom for ${spec.id}`);
+    return (
+      <SovereignWrapper id={spec.id}>
+        {/* THE FIX: Cast raw to any to access business_id without TS error */}
+        <Component businessId={(carton.raw as any)?.business_id || "default"} />
+      </SovereignWrapper>
+    );
+  }
+
   return (
     <DynamicNanoBite
       spec={spec}
@@ -340,6 +394,7 @@ function DynamicNanoBite({
 
   async function execute() {
     setBusy(true);
+    console.log(`[ATOM_EXECUTION]: START - Dispatching task: ${spec.id}`);
     try {
       const payload: Record<string, unknown> = {
         microElement: spec.microElement,
@@ -361,6 +416,9 @@ function DynamicNanoBite({
         payload,
       });
       setInput("");
+      console.log(`[ATOM_EXECUTION]: END - Task ${spec.id} recorded.`);
+    } catch (err: any) {
+      console.error(`[ATOM_EXECUTION]: ERROR - Task ${spec.id} failed:`, err.message);
     } finally {
       setBusy(false);
     }
