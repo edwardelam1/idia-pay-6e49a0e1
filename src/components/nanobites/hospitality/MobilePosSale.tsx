@@ -9,7 +9,16 @@ import { supabase } from '@/integrations/supabase/client';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Plus, Minus, Trash2, ShoppingCart, CheckCircle, ChevronLeft, CreditCard, Banknote, Smartphone, Receipt, PenTool, Gift, Users } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { 
+  Plus, Minus, Trash2, ShoppingCart, CheckCircle, 
+  ChevronLeft, CreditCard, Banknote, Smartphone, 
+  Receipt, PenTool, Gift, Users, Settings, PackageSearch,
+  X, Info
+} from "lucide-react";
+import { toast } from "sonner";
 
 // ============================================================================
 // STRICT DATA SCHEMAS
@@ -27,28 +36,33 @@ export interface MobilePosSaleProps {
 }
 
 export default function MobilePosSale({ 
-  businessId = "default", 
+  businessId: initialBusinessId = "default", 
   onFireToKds,
   onProcessPayment
 }: MobilePosSaleProps) {
 
   // --- STRICT STATE MACHINE ---
-  type PosStep = "menu" | "modifiers" | "cart" | "tip" | "tender" | "signature" | "receipt" | "success";
+  type PosStep = "menu" | "modifiers" | "cart" | "tip" | "tender" | "signature" | "receipt" | "success" | "settings";
   
   const [step, setStep] = useState<PosStep>("menu");
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
   
-  // Database Mapped State
+  // Terminal Settings (Local Override)
+  const [terminalSettings, setTerminalSettings] = useState({
+    businessId: initialBusinessId,
+    taxRate: 0.06,
+    stationName: "Unit-01",
+    isHapticEnabled: true
+  });
+
   const [dbCategories, setDbCategories] = useState<MenuCategory[]>([]);
   const [dbMenuItems, setDbMenuItems] = useState<MenuItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Ticket Splitting State
   const [splitType, setSplitType] = useState<'single' | 'evenly'>('single');
   const [splitWays, setSplitWays] = useState<number>(2);
 
-  // Transient Workflows
   const [selectedItemForMod, setSelectedItemForMod] = useState<MenuItem | null>(null);
   const [pendingModifiers, setPendingModifiers] = useState<Record<string, ModifierOption>>({});
   const [selectedTip, setSelectedTip] = useState<number>(0);
@@ -57,311 +71,202 @@ export default function MobilePosSale({
   const [orderId, setOrderId] = useState<string | null>(null);
 
   const triggerHaptic = useCallback((type: 'light' | 'heavy' = 'light') => {
+    if (!terminalSettings.isHapticEnabled) return;
     try {
       if (typeof window !== 'undefined' && window.navigator && window.navigator.vibrate) {
         window.navigator.vibrate(type === 'heavy' ? [50, 50, 50] : 50);
       }
-    } catch (e) { /* Hardware agnostic fallback */ }
-  }, []);
+    } catch (e) { /* Hardware agnostic */ }
+  }, [terminalSettings.isHapticEnabled]);
 
   // ============================================================================
-  // SUPABASE: FETCH MENU CATALOG
+  // SUPABASE: DIRECT COMMISSARY HYDRATION
   // ============================================================================
-  useEffect(() => {
-    const fetchCatalog = async () => {
-      console.log(`[BEGIN] fetchCatalog execution for businessId: ${businessId}`);
-      setIsLoading(true);
-      try {
-        const { data, error } = await supabase
-          .from('menu_items')
-          .select('*')
-          .eq('business_id', businessId)
-          .eq('is_active', true);
-
-        if (error) throw error;
-
-        if (data && data.length > 0) {
-          // 1. Extract distinct categories from the table
-          const uniqueCats = Array.from(new Set(data.map((item: any) => item.category)));
-          const mappedCats = uniqueCats.map((cat, idx) => ({
-            id: cat as string, 
-            name: cat as string, 
-            colorCode: idx % 2 === 0 ? '#18181b' : '#333333'
-          }));
-          
-          setDbCategories(mappedCats);
-          setActiveCategory(mappedCats[0].id);
-
-          // 2. Map items directly from public.menu_items
-          const mappedItems: MenuItem[] = data.map((item: any) => ({
-            id: item.id,
-            categoryId: item.category,
-            name: item.name,
-            basePrice: Number(item.base_price),
-            modifierGroups: item.recipe_ingredients && Array.isArray(item.recipe_ingredients) && item.recipe_ingredients.length > 0 
-              ? item.recipe_ingredients 
-              : undefined
-          }));
-          
-          setDbMenuItems(mappedItems);
-          console.log(`[INFO] fetchCatalog: Loaded ${mappedItems.length} items across ${mappedCats.length} categories.`);
-        } else {
-          console.log(`[INFO] fetchCatalog: No active menu items found for business.`);
-        }
-      } catch (err: any) {
-        console.error("[ERROR] Failed to fetch catalog:", err.message);
-      } finally {
-        setIsLoading(false);
-        console.log(`[END] fetchCatalog execution`);
-      }
-    };
-
-    if (businessId !== "default") fetchCatalog();
-    else setIsLoading(false);
-  }, [businessId]);
-
-  // ============================================================================
-  // WORKFLOW: MENU & MANDATORY MODIFIERS
-  // ============================================================================
-  const handleItemSelect = useCallback((item: MenuItem) => {
-    console.log(`[BEGIN] handleItemSelect execution for sku: ${item.id}`);
+  const fetchCatalog = async () => {
+    console.log(`[DATA_HYDRATION]: START - Fetching Ledger for ID: ${terminalSettings.businessId}`);
+    setIsLoading(true);
     try {
-      triggerHaptic();
-      const hasRequiredMods = item.modifierGroups?.some(g => g.isRequired);
-      const hasAnyMods = item.modifierGroups && item.modifierGroups.length > 0;
+      const { data, error } = await (supabase.from('menu_items' as any)
+        .select('*')
+        .eq('business_id', terminalSettings.businessId)
+        .eq('is_active', true) as any);
 
-      if (hasRequiredMods || hasAnyMods) {
-        console.log(`[INFO] handleItemSelect: Modifiers detected. Intercepting flow.`);
-        setSelectedItemForMod(item);
-        setPendingModifiers({});
-        setStep("modifiers");
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        const uniqueCats = Array.from(new Set(data.map((item: any) => item.category)));
+        const mappedCats = uniqueCats.map((cat, idx) => ({
+          id: cat as string, 
+          name: cat as string, 
+          colorCode: idx % 2 === 0 ? '#18181b' : '#333333'
+        }));
+        
+        setDbCategories(mappedCats);
+        setActiveCategory(mappedCats[0].id);
+
+        const mappedItems: MenuItem[] = data.map((item: any) => ({
+          id: item.id,
+          categoryId: item.category,
+          name: item.name,
+          basePrice: Number(item.base_price),
+          modifierGroups: item.recipe_ingredients || undefined
+        }));
+        
+        setDbMenuItems(mappedItems);
+        console.log(`[DATA_HYDRATION]: SUCCESS - Loaded ${mappedItems.length} SKUs.`);
       } else {
-        executeAddToCart(item, {});
+        console.log(`[DATA_HYDRATION]: EMPTY - Local restock ledger is unprovisioned.`);
+        setDbCategories([]);
+        setDbMenuItems([]);
       }
-    } catch (error) {
-      console.error(`[ERROR] handleItemSelect failed:`, error);
+    } catch (err: any) {
+      console.error("[CRITICAL_FAILURE]: fetchCatalog Stalled:", err.message);
     } finally {
-      console.log(`[END] handleItemSelect execution`);
+      setIsLoading(false);
+      console.log(`[DATA_HYDRATION]: END - Sync cycle terminated.`);
     }
-  }, [triggerHaptic]);
+  };
 
+  useEffect(() => {
+    fetchCatalog();
+  }, [terminalSettings.businessId]);
+
+  // ============================================================================
+  // WORKFLOW HANDLERS
+  // ============================================================================
   const executeAddToCart = (item: MenuItem, selectedMods: Record<string, ModifierOption>) => {
-    console.log(`[BEGIN] executeAddToCart execution for sku: ${item.id}`);
-    try {
-      const additionalCost = Object.values(selectedMods).reduce((sum, mod) => sum + mod.priceDelta, 0);
-      const newCartItem: CartItem = {
-        cartId: `cart-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        menuItemId: item.id,
-        name: item.name,
-        basePrice: item.basePrice,
-        calculatedPrice: item.basePrice + additionalCost,
-        quantity: 1,
-        seatNumber: 1, 
-        modifiers: selectedMods
-      };
-      
-      setCart(prev => [...prev, newCartItem]);
-      setStep("menu");
-      setSelectedItemForMod(null);
-    } catch (error) {
-      console.error(`[ERROR] executeAddToCart failed:`, error);
-    } finally {
-      console.log(`[END] executeAddToCart execution`);
+    console.log(`[TRANSACTION_START]: Injecting SKU ${item.id} to cart.`);
+    const additionalCost = Object.values(selectedMods).reduce((sum, mod) => sum + mod.priceDelta, 0);
+    const newCartItem: CartItem = {
+      cartId: `cart-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      menuItemId: item.id,
+      name: item.name,
+      basePrice: item.basePrice,
+      calculatedPrice: item.basePrice + additionalCost,
+      quantity: 1,
+      seatNumber: 1, 
+      modifiers: selectedMods
+    };
+    setCart(prev => [...prev, newCartItem]);
+    setStep("menu");
+    setSelectedItemForMod(null);
+    console.log(`[TRANSACTION_DATA]: Cart Count: ${cart.length + 1}`);
+  };
+// THE LAW: 44px min touch target interaction handlers
+const updateQuantity = (cartId: string, delta: number) => {
+  console.log(`[TRANSACTION_DATA]: Updating quantity for ${cartId} by ${delta}`);
+  triggerHaptic();
+  setCart(prev => prev.map(item => {
+    if (item.cartId === cartId) {
+      return { ...item, quantity: Math.max(0, item.quantity + delta) };
     }
-  };
+    return item;
+  }).filter(item => item.quantity > 0)); // Permanent purge if quantity hits zero
+};
 
-  const handleModifierSelection = (groupId: string, option: ModifierOption) => {
-    triggerHaptic();
-    setPendingModifiers(prev => ({ ...prev, [groupId]: option }));
-  };
-
-  const validateAndSubmitModifiers = () => {
-    if (!selectedItemForMod) return;
-
-    const missingRequired = selectedItemForMod.modifierGroups?.find(
-      g => g.isRequired && !pendingModifiers[g.id]
-    );
-
-    if (missingRequired) {
-      triggerHaptic('heavy');
-      alert(`Selection Required: Please choose an option for ${missingRequired.name}`);
-      return;
+const updateSeat = (cartId: string, delta: number) => {
+  console.log(`[TRANSACTION_DATA]: Reassigning seat for ${cartId} by ${delta}`);
+  triggerHaptic();
+  setCart(prev => prev.map(item => {
+    if (item.cartId === cartId) {
+      return { ...item, seatNumber: Math.max(1, item.seatNumber + delta) };
     }
-
-    executeAddToCart(selectedItemForMod, pendingModifiers);
-  };
-
-  // ============================================================================
-  // WORKFLOW: CART & SEAT HANDLING
-  // ============================================================================
-  const updateQuantity = useCallback((cartId: string, delta: number) => {
+    return item;
+  }));
+};
+  const handleItemSelect = (item: MenuItem) => {
     triggerHaptic();
-    setCart(prev => prev.map(item => {
-      if (item.cartId === cartId) return { ...item, quantity: Math.max(0, item.quantity + delta) };
-      return item;
-    }).filter(item => item.quantity > 0)); 
-  }, [triggerHaptic]);
-
-  const updateSeat = useCallback((cartId: string, delta: number) => {
-    triggerHaptic();
-    setCart(prev => prev.map(item => {
-      if (item.cartId === cartId) {
-        const newSeat = Math.max(1, item.seatNumber + delta);
-        return { ...item, seatNumber: newSeat };
-      }
-      return item;
-    }));
-  }, [triggerHaptic]);
-
-  const updateSplitWays = useCallback((delta: number) => {
-    triggerHaptic();
-    setSplitWays(prev => Math.max(2, Math.min(10, prev + delta)));
-  }, [triggerHaptic]);
-
-  // ============================================================================
-  // SUPABASE: FIRE TO KDS & TENDER
-  // ============================================================================
-  const cartSubtotal = cart.reduce((sum, item) => sum + (item.calculatedPrice * item.quantity), 0);
-  const cartTax = cartSubtotal * 0.06; // Structural tax placeholder
-  const cartTotal = cartSubtotal + cartTax + selectedTip;
-
-  const initiateFireAndPay = async () => {
-    console.log(`[BEGIN] initiateFireAndPay execution`);
-    try {
-      setIsProcessing(true);
-      triggerHaptic();
-      
-      if (onFireToKds) {
-        console.log(`[INFO] initiateFireAndPay: Transmitting live ticket to KDS...`);
-        await onFireToKds(cart, { type: splitType, ways: splitWays });
-      }
-      setStep("tip");
-    } catch (error) {
-      console.error(`[ERROR] initiateFireAndPay failed:`, error);
-    } finally {
-      setIsProcessing(false);
-      console.log(`[END] initiateFireAndPay execution`);
+    const hasRequired = item.modifierGroups?.some(g => g.isRequired);
+    const hasAny = item.modifierGroups && item.modifierGroups.length > 0;
+    if (hasRequired || hasAny) {
+      setSelectedItemForMod(item);
+      setPendingModifiers({});
+      setStep("modifiers");
+    } else {
+      executeAddToCart(item, {});
     }
   };
 
   const executeTender = async (method: "Integrated_Tap" | "Gift_Card" | "Cash") => {
-    console.log(`[BEGIN] executeTender execution. Method: ${method}`);
+    console.log(`[PAYMENT_START]: Initializing ${method} tender.`);
     setPaymentMethod(method);
     setIsProcessing(true);
     triggerHaptic();
     
     try {
       const generatedOrderId = `ORD-${Date.now().toString().slice(-6)}`;
-      setOrderId(generatedOrderId);
+      const subtotal = cart.reduce((sum, item) => sum + (item.calculatedPrice * item.quantity), 0);
+      const tax = subtotal * terminalSettings.taxRate;
+      const total = subtotal + tax + selectedTip;
 
-      // 1. Write the transaction natively to public.menu_history (The POS Ledger)
-      const { error: dbError } = await supabase.from('menu_history').insert({
-        business_id: businessId,
+      // THE LAW: Permanent write to menu_history POS Ledger
+      const { error: dbError } = await (supabase.from('menu_history' as any).insert({
+        business_id: terminalSettings.businessId,
         action: 'pos_sale',
-        item_name: `Sale ${generatedOrderId}`,
-        note: `Payment via ${method}`,
+        item_name: `Order ${generatedOrderId}`,
+        note: `Payment: ${method}`,
         metadata: {
-          cart_items: cart.map(c => ({ id: c.menuItemId, qty: c.quantity, price: c.calculatedPrice, seat: c.seatNumber })),
-          subtotal: cartSubtotal,
-          tax: cartTax,
-          tip: selectedTip,
-          total_collected: cartTotal,
-          split_type: splitType,
-          split_ways: splitWays,
-          payment_method: method
+          items: cart.map(c => ({ id: c.menuItemId, qty: c.quantity, price: c.calculatedPrice, seat: c.seatNumber })),
+          financials: { subtotal, tax, tip: selectedTip, total },
+          method
         }
-      });
+      }) as any);
 
       if (dbError) throw dbError;
-      console.log(`[INFO] executeTender: Ledger recorded sale ${generatedOrderId} successfully.`);
+      setOrderId(generatedOrderId);
 
-      // 2. Pass to parent handler for Hardware NFC / USDC Edge Function Handshake
-      if (onProcessPayment) {
-        await onProcessPayment({ 
-          method, 
-          amount: cartTotal, 
-          splitData: { type: splitType, ways: splitWays }, 
-          cart, 
-          businessId,
-          orderId: generatedOrderId 
-        });
-      }
+      if (onFireToKds) await onFireToKds(cart, { type: splitType, ways: splitWays });
+      if (onProcessPayment) await onProcessPayment({ method, amount: total, cart, businessId: terminalSettings.businessId, orderId: generatedOrderId });
 
-      // 3. Route to corresponding fulfillment screen
-      if (method === "Cash") {
-        setStep("receipt");
-      } else {
-        setStep("signature");
-      }
+      setStep(method === "Cash" ? "receipt" : "signature");
     } catch (error: any) {
-      console.error(`[ERROR] executeTender failed:`, error.message);
-      alert("Payment processing failed. Please verify network connection and try again.");
+      console.error(`[PAYMENT_STALL]: Tender failed:`, error.message);
+      toast.error("Stall: Could not commit to ledger.");
     } finally {
       setIsProcessing(false);
-      console.log(`[END] executeTender execution`);
+      console.log(`[PAYMENT_END]: Tender sequence terminated.`);
     }
   };
 
-  const handleReversal = () => {
-    triggerHaptic('heavy');
-    alert(`Reversal initiated for Order ${orderId}. Funds returned to customer.`);
-    setCart([]);
-    setSelectedTip(0);
-    setSplitType('single');
-    setStep("menu");
-  };
+  // ============================================================================
+  // RENDER: THE STEP MACHINE
+  // ============================================================================
+  // Financial Logic: The Hard Truth of the Ledger
+const subtotal = cart.reduce((sum, item) => sum + (item.calculatedPrice * item.quantity), 0);
+const tax = subtotal * terminalSettings.taxRate;
+const total = subtotal + tax + selectedTip;
+  if (isLoading) return <div className="h-screen flex items-center justify-center animate-pulse font-black text-muted-foreground uppercase tracking-widest text-xs">Syncing Local Ledger...</div>;
 
-  // ============================================================================
-  // EMPTY STATE PROTECTIONS
-  // ============================================================================
-  if (isLoading) {
-    return (
-      <div className="flex flex-col items-center justify-center h-screen bg-background p-6 text-center">
-        <ShoppingCart className="h-16 w-16 text-muted-foreground opacity-20 mb-4 animate-pulse" />
-        <h2 className="text-2xl font-bold tracking-tight">Syncing Terminal...</h2>
-      </div>
-    );
-  }
-
-  if (dbCategories.length === 0 || dbMenuItems.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-screen bg-background p-6 text-center">
-        <div className="h-24 w-24 bg-muted rounded-full flex items-center justify-center mb-6 shadow-inner">
-          <ShoppingCart className="h-12 w-12 text-muted-foreground opacity-50" />
-        </div>
-        <h2 className="text-3xl font-bold tracking-tight">System Ready</h2>
-        <p className="text-muted-foreground mt-4 text-lg max-w-sm">
-          Awaiting master menu sync from IDIA Hub. Terminal will automatically unlock when catalogs are provisioned.
-        </p>
-      </div>
-    );
-  }
-
-  // ============================================================================
-  // PRIMARY RENDER 
-  // ============================================================================
   return (
     <div className="flex flex-col h-screen bg-background relative overflow-hidden">
       
       {/* GLOBAL HEADER */}
-      <div className="pt-8 pb-4 px-4 bg-card border-b flex justify-between items-center z-10 shadow-sm">
-        {step !== "menu" && step !== "cart" && step !== "success" ? (
-           <Button variant="ghost" onClick={() => setStep(step === "modifiers" ? "menu" : "cart")} className="min-h-[44px]">
-             <ChevronLeft className="mr-2 h-5 w-5" /> Cancel
-           </Button>
-        ) : (
-          <h1 className="text-2xl font-bold tracking-tight px-2">Register</h1>
-        )}
-        
+      <div className="pt-8 pb-4 px-4 bg-card border-b flex justify-between items-center z-20 shadow-sm">
+        <div className="flex items-center gap-2">
+          {step !== "menu" && step !== "cart" && step !== "success" ? (
+            <Button variant="ghost" className="h-[44px] w-[44px] p-0 rounded-full" onClick={() => setStep(step === "modifiers" ? "menu" : "cart")}>
+              <ChevronLeft size={24} />
+            </Button>
+          ) : (
+            <Button variant="ghost" className="h-[44px] w-[44px] p-0 rounded-full" onClick={() => { triggerHaptic(); setStep("settings"); }}>
+              <Settings size={24} className="text-muted-foreground" />
+            </Button>
+          )}
+          <div className="flex flex-col">
+            <h1 className="text-xl font-black tracking-tight leading-none">Register</h1>
+            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{terminalSettings.stationName}</span>
+          </div>
+        </div>
+
         {(step === "menu" || step === "cart") && (
           <Button 
-            variant={step === "cart" ? "secondary" : "default"} 
-            className="min-h-[44px] relative bg-primary text-primary-foreground font-bold shadow-md active:scale-[0.98] transition-transform"
+            className="min-h-[44px] relative rounded-full px-6 font-black active:scale-95 transition-all shadow-md"
+            variant={step === "cart" ? "secondary" : "default"}
             onClick={() => setStep(step === "menu" ? "cart" : "menu")}
           >
-            {step === "menu" ? "Current Ticket" : "Return to Menu"}
+            {step === "menu" ? "Ticket" : "Menu"}
             {cart.length > 0 && step === "menu" && (
-              <span className="absolute -top-2 -right-2 bg-destructive text-destructive-foreground text-xs font-bold h-6 w-6 flex items-center justify-center rounded-full shadow-sm ring-2 ring-background">
+              <span className="absolute -top-1 -right-1 bg-destructive text-white text-[10px] h-5 w-5 flex items-center justify-center rounded-full ring-2 ring-background">
                 {cart.reduce((acc, item) => acc + item.quantity, 0)}
               </span>
             )}
@@ -371,32 +276,91 @@ export default function MobilePosSale({
 
       <ScrollArea className="flex-1 w-full relative">
         
-        {/* VIEW: 1. MENU GRID */}
-        {step === "menu" && (
-          <div className="flex flex-col h-full">
-            <div className="flex overflow-x-auto py-4 px-4 gap-3 no-scrollbar border-b bg-muted/20">
+        {/* VIEW: SETTINGS (The Law: Labels above, Single Column) */}
+        {step === "settings" && (
+          <div className="p-6 animate-in slide-in-from-left duration-300">
+            <h2 className="text-3xl font-black mb-8">Terminal Settings</h2>
+            <div className="space-y-8 max-w-md">
+              <div className="space-y-2">
+                <Label className="text-xs font-black text-muted-foreground uppercase tracking-widest ml-1">Business Identifier</Label>
+                <Input 
+                  className="h-[56px] rounded-2xl text-lg font-bold" 
+                  value={terminalSettings.businessId}
+                  onChange={(e) => setTerminalSettings({...terminalSettings, businessId: e.target.value})}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs font-black text-muted-foreground uppercase tracking-widest ml-1">Station Name</Label>
+                <Input 
+                  className="h-[56px] rounded-2xl text-lg font-bold" 
+                  value={terminalSettings.stationName}
+                  onChange={(e) => setTerminalSettings({...terminalSettings, stationName: e.target.value})}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs font-black text-muted-foreground uppercase tracking-widest ml-1">Tax Rate (%)</Label>
+                <Input 
+                  type="number" 
+                  className="h-[56px] rounded-2xl text-lg font-bold" 
+                  value={terminalSettings.taxRate * 100}
+                  onChange={(e) => setTerminalSettings({...terminalSettings, taxRate: Number(e.target.value) / 100})}
+                />
+              </div>
+              <div className="flex items-center justify-between p-4 bg-muted/30 rounded-2xl border">
+                <div className="flex flex-col">
+                  <span className="font-bold">Haptic Feedback</span>
+                  <span className="text-xs text-muted-foreground">Vibrate on success/error</span>
+                </div>
+                <Switch 
+                  checked={terminalSettings.isHapticEnabled}
+                  onCheckedChange={(val) => setTerminalSettings({...terminalSettings, isHapticEnabled: val})}
+                />
+              </div>
+              <Button 
+                className="w-full h-[64px] rounded-2xl text-xl font-black shadow-xl"
+                onClick={() => { triggerHaptic(); setStep("menu"); }}
+              >
+                Apply & Save
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* VIEW: EMPTY STATE (Restock Link) */}
+        {dbMenuItems.length === 0 && step === "menu" && (
+          <div className="flex flex-col items-center justify-center py-32 px-8 text-center">
+            <PackageSearch size={80} className="text-muted-foreground/20 mb-6" />
+            <h2 className="text-3xl font-black text-foreground">Catalog Empty</h2>
+            <p className="text-muted-foreground mt-4 font-medium leading-relaxed max-w-xs">
+              Provision your items and recipes via the <span className="font-bold text-foreground">Commissary Restock</span> page to unlock the sales floor.
+            </p>
+          </div>
+        )}
+
+        {/* VIEW: MENU GRID */}
+        {step === "menu" && dbMenuItems.length > 0 && (
+          <div className="flex flex-col pb-32">
+            <div className="flex overflow-x-auto py-4 px-4 gap-3 no-scrollbar bg-muted/10 border-b">
               {dbCategories.map(cat => (
                 <button
                   key={cat.id}
                   onClick={() => { triggerHaptic(); setActiveCategory(cat.id); }}
-                  className={`px-6 py-3 rounded-full text-base font-bold whitespace-nowrap transition-all active:scale-95 shadow-sm border-2 ${activeCategory === cat.id ? 'text-white' : 'bg-card text-foreground border-border'}`}
-                  style={activeCategory === cat.id ? { backgroundColor: cat.colorCode, borderColor: cat.colorCode } : {}}
+                  className={`px-8 py-3 rounded-full text-sm font-black uppercase tracking-tight transition-all active:scale-95 shadow-sm border-2 ${activeCategory === cat.id ? 'bg-primary text-primary-foreground border-primary' : 'bg-card text-foreground border-border'}`}
                 >
                   {cat.name}
                 </button>
               ))}
             </div>
-            
-            <div className="p-4 grid grid-cols-1 gap-4 pb-[120px]">
+            <div className="p-4 grid grid-cols-1 gap-3">
               {dbMenuItems.filter(item => item.categoryId === activeCategory).map(item => (
-                <Card key={item.id} className="active:scale-[0.98] transition-transform cursor-pointer border-border/60 shadow-md hover:shadow-lg" onClick={() => handleItemSelect(item)}>
-                  <CardContent className="p-5 flex justify-between items-center min-h-[88px]">
-                    <div>
-                      <h3 className="font-bold text-xl">{item.name}</h3>
-                      <p className="text-muted-foreground font-semibold text-base mt-1">${item.basePrice.toFixed(2)}</p>
+                <Card key={item.id} className="active:scale-[0.98] transition-all border-none shadow-sm rounded-[24px] cursor-pointer" onClick={() => handleItemSelect(item)}>
+                  <CardContent className="p-6 flex justify-between items-center min-h-[96px]">
+                    <div className="flex flex-col">
+                      <h3 className="font-black text-xl leading-tight">{item.name}</h3>
+                      <p className="text-muted-foreground font-bold text-base mt-1">${item.basePrice.toFixed(2)}</p>
                     </div>
-                    <div className="h-14 w-14 bg-secondary rounded-full flex items-center justify-center border-2 border-border">
-                      <Plus className="h-7 w-7 text-foreground" />
+                    <div className="h-12 w-12 bg-muted rounded-full flex items-center justify-center">
+                      <Plus className="h-6 w-6 text-foreground" />
                     </div>
                   </CardContent>
                 </Card>
@@ -405,85 +369,70 @@ export default function MobilePosSale({
           </div>
         )}
 
-        {/* VIEW: 2. MODIFIERS (Mandatory Intercept) */}
+        {/* VIEW: MODIFIERS (Toast Sophistication) */}
         {step === "modifiers" && selectedItemForMod && (
-          <div className="p-6 pb-[120px] animate-in slide-in-from-bottom-10">
-            <h2 className="text-4xl font-black mb-2 tracking-tight">{selectedItemForMod.name}</h2>
-            <p className="text-muted-foreground mb-8 text-xl font-medium">Ticket Customization</p>
-
-            {selectedItemForMod.modifierGroups?.map(group => (
-              <div key={group.id} className="mb-8 p-5 bg-muted/30 rounded-3xl border border-border/80 shadow-sm">
-                <div className="flex justify-between items-center mb-5">
-                  <h3 className="font-bold text-2xl">{group.name}</h3>
-                  {group.isRequired && <span className="bg-destructive text-destructive-foreground text-sm font-bold px-3 py-1 rounded-md tracking-widest uppercase shadow-sm">Required</span>}
+          <div className="p-6 pb-40 animate-in slide-in-from-bottom">
+            <h2 className="text-4xl font-black tracking-tighter">{selectedItemForMod.name}</h2>
+            <div className="space-y-10 mt-8">
+              {selectedItemForMod.modifierGroups?.map(group => (
+                <div key={group.id} className="space-y-4">
+                  <div className="flex justify-between items-center">
+                    <h3 className="text-xl font-black uppercase tracking-widest text-muted-foreground">{group.name}</h3>
+                    {group.isRequired && <span className="bg-destructive text-white text-[10px] font-black px-3 py-1 rounded-full">REQUIRED</span>}
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {group.options.map(opt => {
+                      const isSelected = pendingModifiers[group.id]?.id === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          onClick={() => { triggerHaptic(); setPendingModifiers({...pendingModifiers, [group.id]: opt}); }}
+                          className={`flex justify-between items-center p-6 rounded-[22px] border-2 transition-all active:scale-[0.98] ${isSelected ? 'border-primary bg-primary/5' : 'border-transparent bg-muted/20'}`}
+                        >
+                          <span className="text-xl font-bold">{opt.name}</span>
+                          {opt.priceDelta > 0 && <span className="text-muted-foreground font-bold text-lg">+${opt.priceDelta.toFixed(2)}</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-                <div className="flex flex-col gap-3">
-                  {group.options.map(opt => {
-                    const isSelected = pendingModifiers[group.id]?.id === opt.id;
-                    return (
-                      <button
-                        key={opt.id}
-                        onClick={() => handleModifierSelection(group.id, opt)}
-                        className={`flex justify-between items-center p-6 rounded-2xl border-2 transition-all min-h-[72px] active:scale-[0.98] ${isSelected ? 'border-primary bg-primary/10 ring-4 ring-primary/20 shadow-inner' : 'border-border bg-card shadow-sm'}`}
-                      >
-                        <span className={`font-bold text-xl ${isSelected ? 'text-primary' : 'text-foreground'}`}>{opt.name}</span>
-                        {opt.priceDelta > 0 && <span className="text-muted-foreground font-bold text-lg">+${opt.priceDelta.toFixed(2)}</span>}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         )}
 
-        {/* VIEW: 3. ACTIVE TICKET */}
+        {/* VIEW: ACTIVE CART (Seat Handling) */}
         {step === "cart" && (
-          <div className="p-4 pb-[300px]">
+          <div className="p-4 pb-[320px]">
             {cart.length === 0 ? (
-              <div className="text-center py-32 text-muted-foreground">
-                <ShoppingCart className="h-24 w-24 mx-auto mb-6 opacity-20" />
-                <p className="text-3xl font-bold tracking-tight">Ticket is empty</p>
-              </div>
+              <div className="text-center py-40 text-muted-foreground/20"><ShoppingCart size={100} className="mx-auto" /></div>
             ) : (
-              <div className="flex flex-col gap-4">
+              <div className="space-y-4">
                 {cart.map(item => (
-                  <Card key={item.cartId} className="border-border shadow-md rounded-2xl overflow-hidden">
-                    <CardContent className="p-5 flex flex-col gap-5">
-                      
+                  <Card key={item.cartId} className="border-none shadow-md rounded-[28px] overflow-hidden">
+                    <CardContent className="p-6 flex flex-col gap-6">
                       <div className="flex justify-between items-start">
-                        <div>
-                          <h3 className="font-bold text-2xl leading-tight">{item.name}</h3>
+                        <div className="flex flex-col">
+                          <span className="font-black text-2xl leading-tight">{item.name}</span>
                           {Object.values(item.modifiers).map(mod => (
-                            <p key={mod.id} className="text-lg text-muted-foreground block font-medium mt-1">↳ {mod.name}</p>
+                            <span key={mod.id} className="text-muted-foreground font-bold text-sm mt-1">↳ {mod.name}</span>
                           ))}
                         </div>
-                        <span className="font-bold text-2xl">${(item.calculatedPrice * item.quantity).toFixed(2)}</span>
+                        <span className="font-black text-2xl">${(item.calculatedPrice * item.quantity).toFixed(2)}</span>
                       </div>
-
-                      <div className="flex justify-between items-center pt-4 border-t mt-2">
-                        <div className="flex items-center gap-3 bg-muted p-1 rounded-full border shadow-inner">
-                          <span className="pl-4 text-sm font-bold text-muted-foreground uppercase tracking-wider">Seat</span>
-                          <Button variant="ghost" className="rounded-full min-h-[48px] min-w-[48px] bg-background shadow-sm hover:bg-background active:scale-95" onClick={() => updateSeat(item.cartId, -1)}>
-                            <Minus className="h-5 w-5" />
-                          </Button>
-                          <span className="font-black text-xl w-6 text-center">{item.seatNumber}</span>
-                          <Button variant="ghost" className="rounded-full min-h-[48px] min-w-[48px] bg-background shadow-sm hover:bg-background active:scale-95" onClick={() => updateSeat(item.cartId, 1)}>
-                            <Plus className="h-5 w-5" />
-                          </Button>
+                      <div className="flex justify-between items-center pt-4 border-t border-muted">
+                        <div className="flex items-center gap-3 bg-muted/50 p-1.5 rounded-full border shadow-inner">
+                          <span className="pl-4 text-[10px] font-black text-muted-foreground uppercase">Seat</span>
+                          <Button variant="ghost" className="h-11 w-11 rounded-full bg-background shadow-sm" onClick={() => updateSeat(item.cartId, -1)}><Minus size={16}/></Button>
+                          <span className="font-black text-lg w-4 text-center">{item.seatNumber}</span>
+                          <Button variant="ghost" className="h-11 w-11 rounded-full bg-background shadow-sm" onClick={() => updateSeat(item.cartId, 1)}><Plus size={16}/></Button>
                         </div>
-
-                        <div className="flex items-center gap-2 bg-muted p-1 rounded-full border shadow-inner">
-                          <Button variant="ghost" className="rounded-full min-h-[48px] min-w-[48px] text-destructive hover:bg-background bg-background shadow-sm active:scale-95" onClick={() => updateQuantity(item.cartId, -1)}>
-                            {item.quantity === 1 ? <Trash2 className="h-6 w-6" /> : <Minus className="h-6 w-6" />}
-                          </Button>
-                          <span className="font-black text-2xl w-10 text-center">{item.quantity}</span>
-                          <Button variant="ghost" className="rounded-full min-h-[48px] min-w-[48px] bg-background shadow-sm hover:bg-background active:scale-95" onClick={() => updateQuantity(item.cartId, 1)}>
-                            <Plus className="h-6 w-6" />
-                          </Button>
+                        <div className="flex items-center gap-2 bg-muted/50 p-1.5 rounded-full border shadow-inner">
+                          <Button variant="ghost" className="h-11 w-11 rounded-full bg-background text-destructive" onClick={() => updateQuantity(item.cartId, -1)}><Trash2 size={16}/></Button>
+                          <span className="font-black text-2xl w-8 text-center">{item.quantity}</span>
+                          <Button variant="ghost" className="h-11 w-11 rounded-full bg-background" onClick={() => updateQuantity(item.cartId, 1)}><Plus size={16}/></Button>
                         </div>
                       </div>
-
                     </CardContent>
                   </Card>
                 ))}
@@ -492,183 +441,75 @@ export default function MobilePosSale({
           </div>
         )}
 
-        {/* VIEW: 4. TIP SELECTION */}
+        {/* VIEW: TENDER & PAYMENT FLOWS */}
         {step === "tip" && (
-          <div className="p-6 pb-[180px] animate-in slide-in-from-right">
-            <h2 className="text-4xl font-black mb-2 text-center tracking-tight">Select Tip</h2>
-            <p className="text-muted-foreground mb-10 text-center text-xl font-medium">Ticket Total: ${cartSubtotal.toFixed(2)}</p>
-            
-            <div className="grid grid-cols-2 gap-5">
-              {[0.15, 0.20, 0.25].map(pct => {
-                const tipAmt = cartSubtotal * pct;
-                return (
-                  <Button 
-                    key={pct} 
-                    variant="outline" 
-                    className="h-32 flex flex-col items-center justify-center text-3xl font-black bg-card border-2 hover:border-primary active:scale-95 shadow-sm"
-                    onClick={() => { triggerHaptic(); setSelectedTip(tipAmt); setStep("tender"); }}
-                  >
-                    <span>{pct * 100}%</span>
-                    <span className="text-lg font-bold text-muted-foreground mt-2">+${tipAmt.toFixed(2)}</span>
-                  </Button>
-                )
-              })}
-              <Button 
-                variant="outline" 
-                className="h-32 text-2xl font-bold bg-card border-2 hover:border-primary active:scale-95 text-muted-foreground shadow-sm"
-                onClick={() => { triggerHaptic(); setSelectedTip(0); setStep("tender"); }}
-              >
-                No Tip
-              </Button>
+          <div className="p-6 pb-40 animate-in slide-in-from-right text-center">
+            <h2 className="text-4xl font-black mb-12">Gratuity</h2>
+            <div className="grid grid-cols-2 gap-4">
+              {[0.15, 0.20, 0.25].map(pct => (
+                <Button key={pct} variant="outline" className="h-32 flex flex-col text-3xl font-black bg-card border-2" onClick={() => { triggerHaptic(); setSelectedTip(subtotal * pct); setStep("tender"); }}>
+                  <span>{pct * 100}%</span>
+                  <span className="text-sm font-bold text-muted-foreground mt-2">+${(subtotal * pct).toFixed(2)}</span>
+                </Button>
+              ))}
+              <Button variant="outline" className="h-32 text-xl font-bold border-2" onClick={() => { triggerHaptic(); setSelectedTip(0); setStep("tender"); }}>No Tip</Button>
             </div>
           </div>
         )}
 
-        {/* VIEW: 5. TENDER/PAYMENT (USDC/Card Integrated + Cash + Gift) */}
         {step === "tender" && (
-          <div className="p-6 pb-[180px] animate-in slide-in-from-right">
-            <h2 className="text-4xl font-black mb-10 text-center tracking-tight">Tender Payment</h2>
-            <div className="flex flex-col gap-5">
-              <Button size="lg" className="h-28 text-2xl font-bold justify-start px-8 bg-blue-600 hover:bg-blue-700 active:scale-[0.98] shadow-lg rounded-2xl" onClick={() => executeTender("Integrated_Tap")} disabled={isProcessing}>
-                <CreditCard className="mr-6 h-10 w-10" /> 
-                <div className="text-left flex flex-col">
-                  <span>Credit / USDC</span>
-                  <span className="text-base font-medium opacity-80 tracking-wide">(Integrated Tap / Dip)</span>
-                </div>
-              </Button>
-              <Button size="lg" className="h-24 text-2xl font-bold justify-start px-8 bg-purple-600 hover:bg-purple-700 active:scale-[0.98] shadow-lg rounded-2xl" onClick={() => executeTender("Gift_Card")} disabled={isProcessing}>
-                <Gift className="mr-6 h-10 w-10" /> Gift Card
-              </Button>
-              <Button size="lg" variant="outline" className="h-24 text-2xl font-bold justify-start px-8 border-2 active:scale-[0.98] shadow-sm rounded-2xl" onClick={() => executeTender("Cash")} disabled={isProcessing}>
-                <Banknote className="mr-6 h-10 w-10" /> Cash
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {/* VIEW: 6. SIGNATURE */}
-        {step === "signature" && (
-          <div className="p-6 pb-[180px] text-center animate-in fade-in">
-            <h2 className="text-4xl font-black mb-4 tracking-tight">Customer Signature</h2>
-            <p className="text-muted-foreground mb-8 text-xl font-medium">Please sign to authorize ${cartTotal.toFixed(2)}</p>
-            
-            <div className="w-full h-80 bg-muted/30 border-2 border-dashed border-border/80 rounded-3xl flex items-center justify-center text-muted-foreground relative touch-none shadow-inner">
-              <PenTool className="h-16 w-16 opacity-20 absolute" />
-              <span className="z-10 font-black tracking-widest uppercase opacity-40 text-xl">Sign Here</span>
-            </div>
-
-            <Button size="lg" className="w-full h-20 mt-10 text-2xl font-bold bg-primary text-primary-foreground shadow-lg active:scale-[0.98] transition-transform rounded-2xl" onClick={() => { triggerHaptic(); setStep("receipt"); }}>
-              Accept Signature
+          <div className="p-6 pb-40 animate-in slide-in-from-right space-y-6">
+            <h2 className="text-4xl font-black text-center mb-8">Tender</h2>
+            <Button size="lg" className="w-full h-28 text-2xl font-black bg-[#007AFF] rounded-3xl" onClick={() => executeTender("Integrated_Tap")} disabled={isProcessing}>
+              <CreditCard className="mr-6 h-10 w-10" /> Credit / USDC
+            </Button>
+            <Button size="lg" variant="outline" className="w-full h-24 text-2xl font-black border-2 rounded-3xl" onClick={() => executeTender("Cash")} disabled={isProcessing}>
+              <Banknote className="mr-6 h-10 w-10" /> Cash
             </Button>
           </div>
         )}
 
-        {/* VIEW: 7. RECEIPT */}
-        {step === "receipt" && (
-          <div className="p-6 pb-[180px] animate-in slide-in-from-right text-center">
-            <div className="h-32 w-32 bg-green-100 rounded-full flex items-center justify-center text-green-600 mx-auto mb-8 shadow-md">
-              <CheckCircle className="h-16 w-16" />
-            </div>
-            <h2 className="text-4xl font-black mb-3 tracking-tight">Payment Secured</h2>
-            <p className="text-muted-foreground mb-10 text-xl font-medium">How would you like your receipt?</p>
-            
-            <div className="flex flex-col gap-5">
-              <Button variant="outline" className="h-20 text-2xl font-bold border-2 active:scale-[0.98] shadow-sm rounded-2xl" onClick={() => { triggerHaptic(); setStep("success"); }}><Receipt className="mr-4 h-8 w-8" /> Print Receipt</Button>
-              <Button variant="outline" className="h-20 text-2xl font-bold border-2 active:scale-[0.98] shadow-sm rounded-2xl" onClick={() => { triggerHaptic(); setStep("success"); }}>@ Email Receipt</Button>
-              <Button variant="outline" className="h-20 text-2xl font-bold border-2 active:scale-[0.98] shadow-sm rounded-2xl" onClick={() => { triggerHaptic(); setStep("success"); }}><Smartphone className="mr-4 h-8 w-8" /> Text Message</Button>
-              <Button variant="ghost" className="h-20 text-2xl font-bold mt-4 active:scale-[0.98]" onClick={() => { triggerHaptic(); setStep("success"); }}>No Receipt</Button>
-            </div>
-          </div>
-        )}
-
-        {/* VIEW: 8. SUCCESS (Reset & Undo State) */}
         {step === "success" && (
-          <div className="flex flex-col items-center justify-center p-10 h-[70vh] animate-in zoom-in-95 text-center">
-            <h2 className="text-5xl font-black mb-4 tracking-tight">Ticket Cleared</h2>
-            <p className="text-muted-foreground text-2xl mb-16 font-medium tracking-wide">Order #{orderId}</p>
-            
-            <Button size="lg" className="w-full h-24 text-3xl font-black bg-primary shadow-xl active:scale-[0.98] transition-transform rounded-2xl mb-8" onClick={() => { triggerHaptic(); setCart([]); setSelectedTip(0); setSplitType('single'); setStep("menu"); }}>
-              Start Next Order
-            </Button>
-
-            <Button variant="ghost" className="text-destructive font-bold text-lg underline underline-offset-4" onClick={handleReversal}>
-              Void Transaction (Undo)
-            </Button>
+          <div className="flex flex-col items-center justify-center p-10 h-full text-center space-y-10 animate-in zoom-in-95">
+            <div className="h-32 w-32 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center shadow-inner"><CheckCircle size={80} /></div>
+            <div className="space-y-2">
+              <h2 className="text-5xl font-black tracking-tighter">Secured</h2>
+              <p className="text-2xl font-bold text-muted-foreground">Order #{orderId}</p>
+            </div>
+            <Button size="lg" className="w-full h-24 text-3xl font-black rounded-[32px] shadow-2xl" onClick={() => { setCart([]); setSelectedTip(0); setStep("menu"); }}>Start New Ticket</Button>
           </div>
         )}
 
       </ScrollArea>
 
-      {/* ============================================================================
-          STICKY BOTTOM ACTION BARS
-          ============================================================================ */}
-
-      {step === "modifiers" && (
-        <div className="fixed bottom-0 left-0 w-full bg-background border-t p-6 shadow-[0_-10px_40px_rgba(0,0,0,0.1)] z-50 animate-in slide-in-from-bottom">
-          <Button size="lg" className="w-full min-h-[80px] text-3xl font-black shadow-lg rounded-2xl active:scale-[0.98] transition-transform" onClick={validateAndSubmitModifiers}>
-            Add Custom Item
-          </Button>
-        </div>
-      )}
-
-      {step === "cart" && cart.length > 0 && (
-        <div className="fixed bottom-0 left-0 w-full bg-background border-t p-4 pb-8 shadow-[0_-20px_50px_rgba(0,0,0,0.15)] z-50 animate-in slide-in-from-bottom rounded-t-3xl">
-          
-          <div className="flex items-center gap-2 mb-6 bg-muted/50 p-1.5 rounded-xl border">
-            <button 
-              onClick={() => { triggerHaptic(); setSplitType('single'); }}
-              className={`flex-1 flex justify-center items-center py-3 rounded-lg text-sm font-bold transition-all ${splitType === 'single' ? 'bg-background shadow-md text-foreground' : 'text-muted-foreground'}`}
-            >
-              Single Check
-            </button>
-            <button 
-              onClick={() => { triggerHaptic(); setSplitType('evenly'); }}
-              className={`flex-1 flex justify-center items-center py-3 rounded-lg text-sm font-bold transition-all ${splitType === 'evenly' ? 'bg-background shadow-md text-foreground' : 'text-muted-foreground'}`}
-            >
-              <Users className="mr-2 h-4 w-4" /> Split Evenly
-            </button>
-          </div>
-
-          {splitType === 'evenly' && (
-            <div className="flex items-center justify-between mb-6 px-2 bg-card p-3 rounded-xl border shadow-sm">
-              <span className="font-bold text-lg text-muted-foreground">Split how many ways?</span>
-              <div className="flex items-center gap-3 bg-muted p-1 rounded-full border">
-                <Button variant="ghost" className="rounded-full min-h-[44px] min-w-[44px] bg-background shadow-sm active:scale-95" onClick={() => updateSplitWays(-1)}>
-                  <Minus className="h-5 w-5" />
-                </Button>
-                <span className="font-black text-2xl w-8 text-center">{splitWays}</span>
-                <Button variant="ghost" className="rounded-full min-h-[44px] min-w-[44px] bg-background shadow-sm active:scale-95" onClick={() => updateSplitWays(1)}>
-                  <Plus className="h-5 w-5" />
-                </Button>
+      {/* STICKY ACTION FOOTER (Thumb Zone) */}
+      {(step === "cart" || step === "modifiers") && (
+        <div className="fixed bottom-0 left-0 w-full bg-background border-t p-6 pb-12 shadow-2xl z-50 rounded-t-[40px] animate-in slide-in-from-bottom">
+          {step === "modifiers" ? (
+             <Button className="h-20 w-full text-2xl font-black rounded-3xl shadow-xl" onClick={() => {
+                const missing = selectedItemForMod?.modifierGroups?.find(g => g.isRequired && !pendingModifiers[g.id]);
+                if (missing) { triggerHaptic('heavy'); alert(`Selection Required: ${missing.name}`); return; }
+                executeAddToCart(selectedItemForMod!, pendingModifiers);
+             }}>Add to Ticket</Button>
+          ) : (
+            <div className="space-y-6">
+              <div className="flex items-center gap-2 bg-muted p-1 rounded-2xl border">
+                <button onClick={() => setSplitType('single')} className={`flex-1 py-4 rounded-xl text-[12px] font-black uppercase tracking-widest transition-all ${splitType === 'single' ? 'bg-background shadow-lg' : 'text-muted-foreground'}`}>Single Check</button>
+                <button onClick={() => setSplitType('evenly')} className={`flex-1 py-4 rounded-xl text-[12px] font-black uppercase tracking-widest transition-all ${splitType === 'evenly' ? 'bg-background shadow-lg' : 'text-muted-foreground'}`}>Split Evenly</button>
               </div>
+              <div className="flex justify-between items-end px-2">
+                <div className="flex flex-col"><span className="text-sm font-black text-muted-foreground uppercase tracking-widest">Total Collected</span><span className="text-5xl font-black tracking-tighter">${total.toFixed(2)}</span></div>
+                {splitType === 'evenly' && <div className="flex items-center gap-3 bg-muted p-1.5 rounded-full border shadow-inner">
+                    <Button variant="ghost" className="rounded-full h-10 w-10 bg-background" onClick={() => setSplitWays(Math.max(2, splitWays - 1))}><Minus size={16}/></Button>
+                    <span className="font-black text-2xl w-6 text-center">{splitWays}</span>
+                    <Button variant="ghost" className="rounded-full h-10 w-10 bg-background" onClick={() => setSplitWays(splitWays + 1)}><Plus size={16}/></Button>
+                </div>}
+              </div>
+              <Button size="lg" className="h-20 w-full text-3xl font-black bg-[#1D1D1F] text-white rounded-[32px] shadow-2xl active:scale-[0.98]" onClick={() => setStep("tip")}>Fire & Pay</Button>
             </div>
           )}
-
-          <div className="flex justify-between text-muted-foreground mb-2 px-3 text-xl font-medium">
-            <span>Subtotal</span><span>${cartSubtotal.toFixed(2)}</span>
-          </div>
-          <div className="flex justify-between text-muted-foreground mb-6 px-3 text-xl font-medium border-b pb-4">
-            <span>Tax (6%)</span><span>${cartTax.toFixed(2)}</span>
-          </div>
-          <div className="flex justify-between items-end mb-6 px-3">
-            <div className="flex flex-col">
-              <span className="text-3xl font-bold tracking-tight">Total</span>
-              {splitType === 'evenly' && <span className="text-base text-primary font-bold mt-1">(${ (cartTotal / splitWays).toFixed(2) } per person)</span>}
-            </div>
-            <span className="text-5xl font-black tracking-tight">${cartTotal.toFixed(2)}</span>
-          </div>
-          
-          <Button 
-            size="lg" 
-            className="w-full min-h-[80px] text-2xl font-black active:scale-[0.98] transition-transform bg-primary shadow-xl rounded-2xl"
-            onClick={initiateFireAndPay}
-            disabled={isProcessing}
-          >
-            {isProcessing ? "Routing to Kitchen..." : "Fire & Pay Ticket"}
-          </Button>
         </div>
       )}
-
     </div>
   );
 }
