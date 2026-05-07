@@ -42,6 +42,11 @@ const SURFACE_STYLE: React.CSSProperties = {
   WebkitBackdropFilter: "blur(30px)",
 };
 
+// ============================================================================
+// TERMINAL SESSION ANCHOR (LOCAL STORAGE)
+// ============================================================================
+const PROVISION_KEY = 'idia_terminal_provision_code';
+
 export function LiquidOS() {
   const [phase, setPhase] = useState<Phase>({ kind: "provisioning" });
   const [activeScreen, setActiveScreen] = useState<string | null>(null);
@@ -49,40 +54,63 @@ export function LiquidOS() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  async function handleProvision(e: FormEvent) {
-    console.log(`[BEGIN] handleProvision execution for code: ${code}`);
-    e.preventDefault();
+  // --- AUTOMATIC HARDWARE RE-HYDRATION ---
+  useEffect(() => {
+    const storedCode = localStorage.getItem(PROVISION_KEY);
+    if (storedCode) {
+      console.log(`[SESSION_RESTORED]: Hardware anchor detected for code: ${storedCode}`);
+      setCode(storedCode);
+      executeProvisioning(storedCode);
+    }
+  }, []);
+
+  // --- CORE PROVISIONING ENGINE ---
+  async function executeProvisioning(provisionCode: string) {
+    console.log(`[BEGIN] executeProvisioning for code: ${provisionCode}`);
     setError(null);
     setLoading(true);
     
     try {
-      console.log(`[INFO] handleProvision: Fetching provisioning blueprint.`);
-      const carton = await fetchProvisioningBlueprint(code);
+      console.log(`[INFO] executeProvisioning: Fetching provisioning blueprint.`);
+      const carton = await fetchProvisioningBlueprint(provisionCode);
       
       if (!carton || carton.subModules.length === 0) {
-        console.warn(`[WARN] handleProvision: HALT - No manifest found for code: ${code}`);
-        setError(`No manifest found for "${code}". Verify the Hub provisioning code.`);
+        console.warn(`[WARN] executeProvisioning: HALT - No manifest found for code: ${provisionCode}`);
+        setError(`No manifest found for "${provisionCode}". Verify the Hub provisioning code.`);
+        localStorage.removeItem(PROVISION_KEY); // Purge invalid anchor
+        setPhase({ kind: "provisioning" });
         return;
       }
 
-      console.log(`[INFO] handleProvision: Manifest retrieved with ${carton.subModules.length} submodules.`);
+      console.log(`[INFO] executeProvisioning: Manifest retrieved with ${carton.subModules.length} submodules.`);
+      
+      // THE LAW: Lock the session to the hardware
+      localStorage.setItem(PROVISION_KEY, provisionCode);
+      console.log(`[SESSION_DATA]: Hardware anchor secured in LocalStorage.`);
 
       if (carton.subModules.length === 1) {
         const sm = carton.subModules[0];
         const tags = uniqueScreens(sm);
-        console.log(`[INFO] handleProvision: Single sub-module optimization triggered for: ${sm.id}`);
+        console.log(`[INFO] executeProvisioning: Single sub-module optimization triggered for: ${sm.id}`);
         setActiveScreen(tags[0] ?? null);
         setPhase({ kind: "operational", carton, subModule: sm });
       } else {
         setPhase({ kind: "selection", carton });
       }
     } catch (err: any) {
-      console.error(`[ERROR] handleProvision execution failed:`, err.message, err.stack);
+      console.error(`[ERROR] executeProvisioning failed:`, err.message, err.stack);
       setError("System failure during manifest retrieval.");
+      localStorage.removeItem(PROVISION_KEY); // Purge on critical failure
     } finally {
       setLoading(false);
-      console.log(`[END] handleProvision execution for code: ${code}`);
+      console.log(`[END] executeProvisioning for code: ${provisionCode}`);
     }
+  }
+
+  async function handleProvision(e: FormEvent) {
+    e.preventDefault();
+    if (!code.trim()) return;
+    await executeProvisioning(code.trim());
   }
 
   async function chooseSubModule(sm: SubModule, carton: VerticalCarton) {
@@ -99,14 +127,17 @@ export function LiquidOS() {
     }
   }
 
+  // --- TERMINAL LOGOUT ---
   function reset() {
     console.log("[BEGIN] reset session execution.");
     try {
+      // THE LAW: Purge hardware anchor
+      localStorage.removeItem(PROVISION_KEY);
       setPhase({ kind: "provisioning" });
       setActiveScreen(null);
       setCode("");
       setError(null);
-      console.log("[INFO] reset: Active memory cleared.");
+      console.log("[SESSION_END]: Active memory and hardware anchor cleared. Terminal unlocked.");
     } catch (err: any) {
       console.error(`[ERROR] reset execution failed:`, err.message);
     } finally {
