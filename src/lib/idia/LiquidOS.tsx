@@ -7,7 +7,6 @@ import {
   type SubModule,
   type VerticalCarton,
 } from "@/lib/idia/registry";
-import { withACA, calculateRoyalty, DATA_ROYALTY_RATE } from "@/lib/idia/aca";
 import {
   recordExecution,
   getExecutionsFor,
