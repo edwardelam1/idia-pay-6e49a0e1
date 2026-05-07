@@ -425,13 +425,6 @@ function DynamicNanoBite({
             className="h-12 px-4 text-[20px] font-semibold bg-secondary focus:outline-none focus:ring-2 focus:ring-ring"
             style={{ borderRadius: 18 }}
           />
-          <div className="flex items-center justify-between text-[12px] text-muted-foreground">
-            <span>Direct Data Royalty</span>
-            <span className="font-medium text-foreground">
-              {(DATA_ROYALTY_RATE * 100).toFixed(2)}% ·{" "}
-              {calculateRoyalty(parseFloat(input || "0") || 0)}
-            </span>
-          </div>
         </>
       ) : (
         <input
