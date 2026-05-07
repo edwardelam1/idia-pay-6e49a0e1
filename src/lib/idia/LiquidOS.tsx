@@ -56,7 +56,6 @@ export function LiquidOS() {
   }
 
   async function chooseSubModule(sm: SubModule, carton: VerticalCarton) {
-    await withACA("submodule.select", { id: sm.id });
     const tags = uniqueScreens(sm);
     console.log(`[OS_HYDRATION]: START - Sidebar build (${sm.id}).`);
     setActiveScreen(tags[0] ?? null);
