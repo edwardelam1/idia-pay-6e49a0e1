@@ -54,6 +54,10 @@ export function LiquidOS() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // --- MOBILE FIRST GESTURE & SIDEBAR STATE ---
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [touchStartX, setTouchStartX] = useState<number | null>(null);
+
   // --- AUTOMATIC HARDWARE RE-HYDRATION ---
   useEffect(() => {
     const storedCode = localStorage.getItem(PROVISION_KEY);
@@ -63,6 +67,27 @@ export function LiquidOS() {
       executeProvisioning(storedCode);
     }
   }, []);
+
+  // --- GESTURE TELEMETRY ---
+  const handleTouchStart = (e: React.TouchEvent) => {
+    setTouchStartX(e.touches[0].clientX);
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartX === null) return;
+    const touchEndX = e.changedTouches[0].clientX;
+    const diffX = touchStartX - touchEndX;
+
+    // THE LAW: Swipe Left to Hide (> 50px delta)
+    if (diffX > 50) {
+      setIsSidebarOpen(false);
+    }
+    // THE LAW: Pull Right from Edge to Reveal (< -50px delta AND started within 40px of edge)
+    else if (diffX < -50 && touchStartX < 40) {
+      setIsSidebarOpen(true);
+    }
+    setTouchStartX(null);
+  };
 
   // --- CORE PROVISIONING ENGINE ---
   async function executeProvisioning(provisionCode: string) {
@@ -77,14 +102,13 @@ export function LiquidOS() {
       if (!carton || carton.subModules.length === 0) {
         console.warn(`[WARN] executeProvisioning: HALT - No manifest found for code: ${provisionCode}`);
         setError(`No manifest found for "${provisionCode}". Verify the Hub provisioning code.`);
-        localStorage.removeItem(PROVISION_KEY); // Purge invalid anchor
+        localStorage.removeItem(PROVISION_KEY); 
         setPhase({ kind: "provisioning" });
         return;
       }
 
       console.log(`[INFO] executeProvisioning: Manifest retrieved with ${carton.subModules.length} submodules.`);
       
-      // THE LAW: Lock the session to the hardware
       localStorage.setItem(PROVISION_KEY, provisionCode);
       console.log(`[SESSION_DATA]: Hardware anchor secured in LocalStorage.`);
 
@@ -94,13 +118,15 @@ export function LiquidOS() {
         console.log(`[INFO] executeProvisioning: Single sub-module optimization triggered for: ${sm.id}`);
         setActiveScreen(tags[0] ?? null);
         setPhase({ kind: "operational", carton, subModule: sm });
+        setIsSidebarOpen(false); // Auto-hide on single module
       } else {
         setPhase({ kind: "selection", carton });
+        setIsSidebarOpen(true); // Open to allow selection
       }
     } catch (err: any) {
       console.error(`[ERROR] executeProvisioning failed:`, err.message, err.stack);
       setError("System failure during manifest retrieval.");
-      localStorage.removeItem(PROVISION_KEY); // Purge on critical failure
+      localStorage.removeItem(PROVISION_KEY); 
     } finally {
       setLoading(false);
       console.log(`[END] executeProvisioning for code: ${provisionCode}`);
@@ -119,6 +145,7 @@ export function LiquidOS() {
       const tags = uniqueScreens(sm);
       setActiveScreen(tags[0] ?? null);
       setPhase({ kind: "operational", carton, subModule: sm });
+      setIsSidebarOpen(false); // Auto-hide sidebar upon selection
       console.log(`[INFO] chooseSubModule: Stage built with ${tags.length} screens.`);
     } catch (err: any) {
       console.error(`[ERROR] chooseSubModule execution failed:`, err.message);
@@ -131,12 +158,12 @@ export function LiquidOS() {
   function reset() {
     console.log("[BEGIN] reset session execution.");
     try {
-      // THE LAW: Purge hardware anchor
       localStorage.removeItem(PROVISION_KEY);
       setPhase({ kind: "provisioning" });
       setActiveScreen(null);
       setCode("");
       setError(null);
+      setIsSidebarOpen(true); // Reset view state
       console.log("[SESSION_END]: Active memory and hardware anchor cleared. Terminal unlocked.");
     } catch (err: any) {
       console.error(`[ERROR] reset execution failed:`, err.message);
@@ -198,9 +225,15 @@ export function LiquidOS() {
   if (phase.kind === "selection") {
     const looped = [...phase.carton.subModules, ...phase.carton.subModules];
     return (
-      <div className="min-h-screen flex bg-[#FBFBFD]">
+      <div 
+        className="min-h-screen flex bg-[#FBFBFD] overflow-hidden relative"
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+      >
         <aside
-          className="w-72 shrink-0 border-r border-border sticky top-0 h-screen flex flex-col"
+          className={`w-72 shrink-0 border-r border-border fixed inset-y-0 left-0 z-50 h-screen flex flex-col transition-transform duration-300 ease-in-out shadow-[10px_0_40px_rgba(0,0,0,0.05)] ${
+            isSidebarOpen ? "translate-x-0" : "-translate-x-full"
+          }`}
           style={SURFACE_STYLE}
         >
           <div className="p-5">
@@ -241,13 +274,14 @@ export function LiquidOS() {
           <div className="p-4 border-t border-border">
             <button
               onClick={reset}
-              className="text-[12px] text-muted-foreground hover:text-foreground"
+              className="text-[12px] text-muted-foreground hover:text-foreground w-full text-left"
             >
               ↻ End Session
             </button>
           </div>
         </aside>
-        <main className="flex-1 flex items-center justify-center px-10">
+        
+        <main className="flex-1 w-full flex items-center justify-center px-6 sm:px-10">
           <div
             className="max-w-lg w-full bg-white p-10 text-center"
             style={{
@@ -264,7 +298,7 @@ export function LiquidOS() {
             </h1>
             <p className="text-[14px] text-muted-foreground mt-3 leading-relaxed">
               {phase.carton.subModules.length} operational units are available. 
-              Choose one from the Liquid Sidebar to hydrate the terminal.
+              {!isSidebarOpen && " Pull from the left edge to reveal the menu."}
             </p>
           </div>
         </main>
@@ -280,9 +314,15 @@ export function LiquidOS() {
     .sort((a, b) => a.order - b.order);
 
   return (
-    <div className="min-h-screen flex">
+    <div 
+      className="min-h-screen flex bg-[#FBFBFD] overflow-hidden relative"
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+    >
       <aside
-        className="w-64 shrink-0 border-r border-border p-5 flex flex-col gap-2 sticky top-0 h-screen"
+        className={`w-64 shrink-0 border-r border-border p-5 flex flex-col gap-2 fixed inset-y-0 left-0 z-50 h-screen transition-transform duration-300 ease-in-out shadow-[10px_0_40px_rgba(0,0,0,0.05)] ${
+          isSidebarOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
         style={SURFACE_STYLE}
       >
         <div className="flex items-center gap-2 px-2 py-3">
@@ -297,6 +337,7 @@ export function LiquidOS() {
           onClick={() => {
             console.log("[INFO] Returning to Selection Grid.");
             setPhase({ kind: "selection", carton: phase.carton });
+            setIsSidebarOpen(true);
           }}
           className="flex items-center gap-2 w-full px-3 py-2.5 mb-2 text-[11px] font-bold text-[#007AFF] uppercase tracking-[0.12em] bg-blue-50/40 hover:bg-blue-50 border border-blue-100/30 rounded-[14px] transition-all active:scale-[0.98]"
         >
@@ -314,7 +355,10 @@ export function LiquidOS() {
             return (
               <button
                 key={s}
-                onClick={() => setActiveScreen(s)}
+                onClick={() => {
+                  setActiveScreen(s);
+                  setIsSidebarOpen(false); // Auto-hide upon Nano-Bite screen selection
+                }}
                 className={`text-left h-10 px-3 text-[13px] font-medium transition-all shrink-0 ${
                   active ? "text-white shadow-sm" : "text-foreground hover:bg-secondary"
                 }`}
@@ -343,8 +387,9 @@ export function LiquidOS() {
         </div>
       </aside>
 
-      <main className="flex-1 px-10 py-10 bg-[#FBFBFD] overflow-y-auto h-screen custom-scrollbar">
-        <header className="flex items-center justify-between mb-8">
+      {/* Main takes full width, off-canvas overlays it */}
+      <main className="flex-1 w-full px-2 py-6 sm:px-10 sm:py-10 overflow-y-auto h-screen custom-scrollbar">
+        <header className="flex items-center justify-between mb-8 pl-4">
           <div>
             <p className="text-[12px] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
               {phase.subModule.industry}
@@ -352,7 +397,7 @@ export function LiquidOS() {
             <h1 className="text-[32px] font-semibold tracking-tight mt-1">{current}</h1>
           </div>
           <div
-            className="px-4 h-11 flex items-center gap-2 text-[12px] text-muted-foreground"
+            className="px-4 h-11 flex items-center gap-2 text-[12px] text-muted-foreground shadow-sm"
             style={{ ...SURFACE_STYLE, borderRadius: 18, border: "1px solid #F2F2F7" }}
           >
             <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
@@ -393,7 +438,6 @@ function NanoBiteRenderer({
     if (expectedFileName) {
       console.log(`[INFO] NanoBiteRenderer: Registry mapped ${spec.id} to filename ${expectedFileName}.tsx. Scanning glob...`);
       
-      // Attempt to locate the file in the eager load array
       const match = Object.entries(rawAtoms).find(([path]) => path.endsWith(`/${expectedFileName}.tsx`));
       
       if (match) {
@@ -411,7 +455,6 @@ function NanoBiteRenderer({
     console.log(`[END] NanoBiteRenderer atom resolution phase for spec.id: ${spec.id}`);
   }
 
-  // If a physical file matched successfully, hydrate it
   if (Component) {
     return (
       <SovereignWrapper id={spec.id}>
@@ -420,7 +463,6 @@ function NanoBiteRenderer({
     );
   }
 
-  // Fallback to purely generic UI engine if no physical component exists in the file structure
   return (
     <DynamicNanoBite
       spec={spec}
