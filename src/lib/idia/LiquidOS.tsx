@@ -36,7 +36,7 @@ export function LiquidOS() {
     e.preventDefault();
     setError(null);
     setLoading(true);
-    await withACA("provisioning.attempt", { code });
+    
     const carton = await fetchProvisioningBlueprint(code);
     setLoading(false);
     if (!carton || carton.subModules.length === 0) {
