@@ -1554,19 +1554,16 @@ export type Database = {
       }
       data_lineage_index: {
         Row: {
-          aca_hash_key: string
           created_at: string | null
           data_category: string | null
           source_table: string
         }
         Insert: {
-          aca_hash_key: string
           created_at?: string | null
           data_category?: string | null
           source_table: string
         }
         Update: {
-          aca_hash_key?: string
           created_at?: string | null
           data_category?: string | null
           source_table?: string
@@ -1678,7 +1675,6 @@ export type Database = {
       }
       delt_transfers: {
         Row: {
-          aca_hash: string
           action_type: string
           amount: number | null
           created_at: string | null
@@ -1690,7 +1686,6 @@ export type Database = {
           user_id: string | null
         }
         Insert: {
-          aca_hash: string
           action_type: string
           amount?: number | null
           created_at?: string | null
@@ -1702,7 +1697,6 @@ export type Database = {
           user_id?: string | null
         }
         Update: {
-          aca_hash?: string
           action_type?: string
           amount?: number | null
           created_at?: string | null
@@ -1928,8 +1922,6 @@ export type Database = {
       }
       egress_logs: {
         Row: {
-          aca_record_ids: string[] | null
-          aca_record_references: string[]
           batch_checksum: string | null
           bundle_id: string | null
           buyer_intent: string | null
@@ -1961,8 +1953,6 @@ export type Database = {
           verification_status: string | null
         }
         Insert: {
-          aca_record_ids?: string[] | null
-          aca_record_references?: string[]
           batch_checksum?: string | null
           bundle_id?: string | null
           buyer_intent?: string | null
@@ -1994,8 +1984,6 @@ export type Database = {
           verification_status?: string | null
         }
         Update: {
-          aca_record_ids?: string[] | null
-          aca_record_references?: string[]
           batch_checksum?: string | null
           bundle_id?: string | null
           buyer_intent?: string | null
@@ -2239,7 +2227,6 @@ export type Database = {
       }
       employees: {
         Row: {
-          aca_secured: boolean
           address: string | null
           assigned_locations: string[] | null
           business_id: string
@@ -2272,7 +2259,6 @@ export type Database = {
           zip: string | null
         }
         Insert: {
-          aca_secured?: boolean
           address?: string | null
           assigned_locations?: string[] | null
           business_id: string
@@ -2305,7 +2291,6 @@ export type Database = {
           zip?: string | null
         }
         Update: {
-          aca_secured?: boolean
           address?: string | null
           assigned_locations?: string[] | null
           business_id?: string
@@ -5137,12 +5122,10 @@ export type Database = {
       }
       raw_app_data: {
         Row: {
-          aca_hash_key: string | null
           anonymized_payload: Json
           created_at: string | null
           data_category: string
           data_quality_score: number | null
-          device_aca_key: string | null
           event_type: string
           id: string
           location_zone: string | null
@@ -5153,12 +5136,10 @@ export type Database = {
           telemetry_payload: Json | null
         }
         Insert: {
-          aca_hash_key?: string | null
           anonymized_payload: Json
           created_at?: string | null
           data_category: string
           data_quality_score?: number | null
-          device_aca_key?: string | null
           event_type: string
           id?: string
           location_zone?: string | null
@@ -5169,12 +5150,10 @@ export type Database = {
           telemetry_payload?: Json | null
         }
         Update: {
-          aca_hash_key?: string | null
           anonymized_payload?: Json
           created_at?: string | null
           data_category?: string
           data_quality_score?: number | null
-          device_aca_key?: string | null
           event_type?: string
           id?: string
           location_zone?: string | null
@@ -5188,8 +5167,6 @@ export type Database = {
       }
       raw_health_data: {
         Row: {
-          aca_hash: string | null
-          aca_hash_key: string | null
           activity_type: string | null
           created_at: string | null
           device_type: string | null
@@ -5208,8 +5185,6 @@ export type Database = {
           user_id: string | null
         }
         Insert: {
-          aca_hash?: string | null
-          aca_hash_key?: string | null
           activity_type?: string | null
           created_at?: string | null
           device_type?: string | null
@@ -5228,8 +5203,6 @@ export type Database = {
           user_id?: string | null
         }
         Update: {
-          aca_hash?: string | null
-          aca_hash_key?: string | null
           activity_type?: string | null
           created_at?: string | null
           device_type?: string | null
@@ -5943,7 +5916,6 @@ export type Database = {
       }
       staged_health_data: {
         Row: {
-          aca_hash_key: string | null
           active_energy_kcal: number | null
           activity_type: string
           basal_energy_kcal: number | null
@@ -5987,7 +5959,6 @@ export type Database = {
           walking_steadiness_percentage: number | null
         }
         Insert: {
-          aca_hash_key?: string | null
           active_energy_kcal?: number | null
           activity_type: string
           basal_energy_kcal?: number | null
@@ -6031,7 +6002,6 @@ export type Database = {
           walking_steadiness_percentage?: number | null
         }
         Update: {
-          aca_hash_key?: string | null
           active_energy_kcal?: number | null
           activity_type?: string
           basal_energy_kcal?: number | null
@@ -6078,7 +6048,6 @@ export type Database = {
       }
       staged_lifestyle_data: {
         Row: {
-          aca_hash_key: string | null
           created_at: string | null
           data_quality_score: number | null
           entity_id: string
@@ -6094,7 +6063,6 @@ export type Database = {
           user_id: string | null
         }
         Insert: {
-          aca_hash_key?: string | null
           created_at?: string | null
           data_quality_score?: number | null
           entity_id: string
@@ -6110,7 +6078,6 @@ export type Database = {
           user_id?: string | null
         }
         Update: {
-          aca_hash_key?: string | null
           created_at?: string | null
           data_quality_score?: number | null
           entity_id?: string
@@ -6194,7 +6161,6 @@ export type Database = {
       }
       synapse_controller: {
         Row: {
-          aca_hash_key: string
           created_at: string
           id: string
           raw_data: Json
@@ -6202,7 +6168,6 @@ export type Database = {
           user_id: string
         }
         Insert: {
-          aca_hash_key: string
           created_at?: string
           id?: string
           raw_data: Json
@@ -6210,7 +6175,6 @@ export type Database = {
           user_id: string
         }
         Update: {
-          aca_hash_key?: string
           created_at?: string
           id?: string
           raw_data?: Json
@@ -6803,44 +6767,6 @@ export type Database = {
           wallet_user_id?: string | null
         }
         Relationships: []
-      }
-      user_aca_records: {
-        Row: {
-          aca_hash_key: string
-          consent_scope: string[]
-          consent_type: string | null
-          created_at: string | null
-          id: string
-          platform_guid: string
-          source_id: string
-        }
-        Insert: {
-          aca_hash_key: string
-          consent_scope?: string[]
-          consent_type?: string | null
-          created_at?: string | null
-          id?: string
-          platform_guid: string
-          source_id?: string
-        }
-        Update: {
-          aca_hash_key?: string
-          consent_scope?: string[]
-          consent_type?: string | null
-          created_at?: string | null
-          id?: string
-          platform_guid?: string
-          source_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "user_aca_records_platform_guid_fkey"
-            columns: ["platform_guid"]
-            isOneToOne: false
-            referencedRelation: "profiles"
-            referencedColumns: ["platform_guid"]
-          },
-        ]
       }
       user_api_keys: {
         Row: {
@@ -7500,7 +7426,6 @@ export type Database = {
       }
       team_members: {
         Row: {
-          aca_secured: boolean | null
           address: string | null
           assigned_locations: string[] | null
           business_id: string | null
@@ -7533,7 +7458,6 @@ export type Database = {
           zip: string | null
         }
         Insert: {
-          aca_secured?: boolean | null
           address?: string | null
           assigned_locations?: string[] | null
           business_id?: string | null
@@ -7566,7 +7490,6 @@ export type Database = {
           zip?: string | null
         }
         Update: {
-          aca_secured?: boolean | null
           address?: string | null
           assigned_locations?: string[] | null
           business_id?: string | null
@@ -7848,7 +7771,6 @@ export type Database = {
       is_org_admin: { Args: { _business_id: string }; Returns: boolean }
       log_delt_egress: {
         Args: {
-          p_aca_hash: string
           p_client_id: string
           p_egress_type: string
           p_liability_hash: string
@@ -7874,56 +7796,9 @@ export type Database = {
           processed_count: number
         }[]
       }
-      provision_employee_via_aca: {
-        Args: {
-          _business_id: string
-          _platform_guid: string
-          _platform_role: string
-        }
-        Returns: {
-          aca_secured: boolean
-          address: string | null
-          assigned_locations: string[] | null
-          business_id: string
-          city: string | null
-          created_at: string
-          direct_deposit_enabled: boolean | null
-          email: string
-          emergency_contact_name: string | null
-          emergency_contact_phone: string | null
-          hire_date: string | null
-          hourly_rate: number | null
-          id: string
-          is_ephemeral: boolean
-          last_login: string | null
-          name: string
-          notes: string | null
-          overtime_rate: number | null
-          pay_frequency: string | null
-          permission_template_id: string | null
-          permissions: Json | null
-          phone: string | null
-          platform_role: string
-          role: string
-          salary_type: string | null
-          state: string | null
-          status: string
-          tax_filing_status: string | null
-          updated_at: string
-          user_id: string | null
-          zip: string | null
-        }
-        SetofOptions: {
-          from: "*"
-          to: "employees"
-          isOneToOne: true
-          isSetofReturn: false
-        }
-      }
       provision_ephemeral_employee: {
         Args: { _business_id: string }
         Returns: {
-          aca_secured: boolean
           address: string | null
           assigned_locations: string[] | null
           business_id: string
@@ -7965,7 +7840,6 @@ export type Database = {
       revoke_employee: {
         Args: { _employee_id: string }
         Returns: {
-          aca_secured: boolean
           address: string | null
           assigned_locations: string[] | null
           business_id: string
@@ -8023,7 +7897,6 @@ export type Database = {
       settle_synapse_consumption:
         | {
             Args: {
-              p_aca_hashes: string[]
               p_agent_type: string
               p_liability_hash: string
               p_pseudo_id: string
@@ -8033,7 +7906,6 @@ export type Database = {
           }
         | {
             Args: {
-              p_aca_hashes: string[]
               p_agent_type: string
               p_liability_hash: string
               p_pseudo_id: string
