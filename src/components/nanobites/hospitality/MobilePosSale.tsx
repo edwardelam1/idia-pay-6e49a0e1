@@ -1,7 +1,8 @@
 /** * NANO-BITE ID: hosp.ft.sales.mobile_pos
  * NANO-BITE NAME: Mobile-POS sale
  * ROLE: Daily
- * INDUSTRY: tertiary.hospitality.food_truck 
+ * INDUSTRY: tertiary.hospitality.food_truck
+ * Menu -> Modifiers -> Cart -> Tip -> Tender -> Signature -> Success.
  */
 
 import React, { useState, useCallback, useEffect } from 'react';
