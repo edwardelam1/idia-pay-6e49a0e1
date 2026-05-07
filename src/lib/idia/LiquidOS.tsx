@@ -7,7 +7,6 @@ import {
   type SubModule,
   type VerticalCarton,
 } from "@/lib/idia/registry";
-import { withACA, calculateRoyalty, DATA_ROYALTY_RATE } from "@/lib/idia/aca";
 import {
   recordExecution,
   getExecutionsFor,
@@ -37,7 +36,7 @@ export function LiquidOS() {
     e.preventDefault();
     setError(null);
     setLoading(true);
-    await withACA("provisioning.attempt", { code });
+    
     const carton = await fetchProvisioningBlueprint(code);
     setLoading(false);
     if (!carton || carton.subModules.length === 0) {
@@ -57,7 +56,6 @@ export function LiquidOS() {
   }
 
   async function chooseSubModule(sm: SubModule, carton: VerticalCarton) {
-    await withACA("submodule.select", { id: sm.id });
     const tags = uniqueScreens(sm);
     console.log(`[OS_HYDRATION]: START - Sidebar build (${sm.id}).`);
     setActiveScreen(tags[0] ?? null);
@@ -228,10 +226,7 @@ export function LiquidOS() {
             return (
               <button
                 key={s}
-                onClick={() => {
-                  setActiveScreen(s);
-                  withACA("sidebar.navigate", { screen: s });
-                }}
+                onClick={() => setActiveScreen(s)}
                 className={`text-left h-10 px-3 text-[13px] font-medium transition-all ${
                   active ? "text-white shadow-sm" : "text-foreground hover:bg-secondary"
                 }`}
@@ -354,18 +349,16 @@ function DynamicNanoBite({
         const amount = parseFloat(input || "0") || 0;
         payload.amount = amount;
         payload.rail = rail;
-        payload.royalty = calculateRoyalty(amount);
       } else if (input.trim()) {
         payload.input = input.trim();
       }
-      const artifact = await withACA(`nanobite.${spec.id}`, payload);
       recordExecution({
         cartonCode,
         subModuleId,
         nanoBiteId: spec.id,
         screen: spec.screen,
         action: isPayment ? "pos.charge" : "execute",
-        payload: { ...payload, acaTimestamp: artifact.timestamp },
+        payload,
       });
       setInput("");
     } finally {
@@ -432,13 +425,6 @@ function DynamicNanoBite({
             className="h-12 px-4 text-[20px] font-semibold bg-secondary focus:outline-none focus:ring-2 focus:ring-ring"
             style={{ borderRadius: 18 }}
           />
-          <div className="flex items-center justify-between text-[12px] text-muted-foreground">
-            <span>Direct Data Royalty</span>
-            <span className="font-medium text-foreground">
-              {(DATA_ROYALTY_RATE * 100).toFixed(2)}% ·{" "}
-              {calculateRoyalty(parseFloat(input || "0") || 0)}
-            </span>
-          </div>
         </>
       ) : (
         <input
