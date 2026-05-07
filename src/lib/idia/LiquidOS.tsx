@@ -349,18 +349,16 @@ function DynamicNanoBite({
         const amount = parseFloat(input || "0") || 0;
         payload.amount = amount;
         payload.rail = rail;
-        payload.royalty = calculateRoyalty(amount);
       } else if (input.trim()) {
         payload.input = input.trim();
       }
-      const artifact = await withACA(`nanobite.${spec.id}`, payload);
       recordExecution({
         cartonCode,
         subModuleId,
         nanoBiteId: spec.id,
         screen: spec.screen,
         action: isPayment ? "pos.charge" : "execute",
-        payload: { ...payload, acaTimestamp: artifact.timestamp },
+        payload,
       });
       setInput("");
     } finally {
