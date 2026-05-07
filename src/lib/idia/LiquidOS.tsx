@@ -14,19 +14,21 @@ import {
   type ExecutionRecord,
 } from "@/lib/idia/executions";
 
-// --- PHYSICAL ATOM IMPORTS ---
-import DailyPrepList from "@/components/nanobites/hospitality/DailyPrepList";
-import HealthPermitLog from "@/components/nanobites/hospitality/HealthPermitLog";
-// THE FIX: Import as Default Export to match the newly created SovereignWrapper file
 import SovereignWrapper from "@/components/sovereign/SovereignWrapper";
 
 /**
- * PHYSICAL_LEGO_BRIDGE
- * Maps Taxonomy IDs to high-fidelity UI components.
+ * THE LIQUID ATOM REGISTRY
+ * Eagerly loads all physical Nano-bites at build time. 
+ * If a file is missing, Vite ignores it instead of crashing.
  */
-const PHYSICAL_LEGO_BRIDGE: Record<string, any> = {
-  "hosp.ft.ops.prep": DailyPrepList,
-  "hosp.ft.infra.health": HealthPermitLog,
+const rawAtoms = import.meta.glob('/src/components/nanobites/**/*.tsx', { eager: true });
+
+const ATOM_FILE_MAP: Record<string, string> = {
+  "hosp.ft.ops.service_loc": "ServiceLocation",
+  "hosp.ft.ops.prep": "DailyPrepList",
+  "hosp.ft.sales.mobile_pos": "MobilePosSale",
+  "hosp.ft.infra.health": "HealthPermitLog",
+  "hosp.ft.ops.restock": "CommissaryRestock",
 };
 
 type Phase =
@@ -48,53 +50,68 @@ export function LiquidOS() {
   const [loading, setLoading] = useState(false);
 
   async function handleProvision(e: FormEvent) {
+    console.log(`[BEGIN] handleProvision execution for code: ${code}`);
     e.preventDefault();
-    console.log("[LIQUID_OS]: START - Provisioning sequence for code:", code);
     setError(null);
     setLoading(true);
     
     try {
+      console.log(`[INFO] handleProvision: Fetching provisioning blueprint.`);
       const carton = await fetchProvisioningBlueprint(code);
-      setLoading(false);
       
       if (!carton || carton.subModules.length === 0) {
-        console.error("[LIQUID_OS]: HALT - No manifest found.");
+        console.warn(`[WARN] handleProvision: HALT - No manifest found for code: ${code}`);
         setError(`No manifest found for "${code}". Verify the Hub provisioning code.`);
         return;
       }
 
+      console.log(`[INFO] handleProvision: Manifest retrieved with ${carton.subModules.length} submodules.`);
+
       if (carton.subModules.length === 1) {
         const sm = carton.subModules[0];
         const tags = uniqueScreens(sm);
-        console.log(`[OS_HYDRATION]: Single sub-module optimization triggered for: ${sm.id}`);
+        console.log(`[INFO] handleProvision: Single sub-module optimization triggered for: ${sm.id}`);
         setActiveScreen(tags[0] ?? null);
         setPhase({ kind: "operational", carton, subModule: sm });
       } else {
         setPhase({ kind: "selection", carton });
       }
-      console.log("[LIQUID_OS]: END - Hydration sequence successful.");
     } catch (err: any) {
-      console.error("[LIQUID_OS]: ERROR - Provisioning failed:", err.message);
+      console.error(`[ERROR] handleProvision execution failed:`, err.message, err.stack);
       setError("System failure during manifest retrieval.");
+    } finally {
       setLoading(false);
+      console.log(`[END] handleProvision execution for code: ${code}`);
     }
   }
 
   async function chooseSubModule(sm: SubModule, carton: VerticalCarton) {
-    console.log(`[NAV_EVENT]: START - Hydrating submodule stage: ${sm.id}`);
-    const tags = uniqueScreens(sm);
-    setActiveScreen(tags[0] ?? null);
-    setPhase({ kind: "operational", carton, subModule: sm });
-    console.log(`[NAV_EVENT]: END - Stage built with ${tags.length} screens.`);
+    console.log(`[BEGIN] chooseSubModule execution for submodule: ${sm.id}`);
+    try {
+      const tags = uniqueScreens(sm);
+      setActiveScreen(tags[0] ?? null);
+      setPhase({ kind: "operational", carton, subModule: sm });
+      console.log(`[INFO] chooseSubModule: Stage built with ${tags.length} screens.`);
+    } catch (err: any) {
+      console.error(`[ERROR] chooseSubModule execution failed:`, err.message);
+    } finally {
+      console.log(`[END] chooseSubModule execution for submodule: ${sm.id}`);
+    }
   }
 
   function reset() {
-    console.log("[SYSTEM]: START - Initiating session purge.");
-    setPhase({ kind: "provisioning" });
-    setActiveScreen(null);
-    setCode("");
-    setError(null);
-    console.log("[SYSTEM]: END - Active memory cleared.");
+    console.log("[BEGIN] reset session execution.");
+    try {
+      setPhase({ kind: "provisioning" });
+      setActiveScreen(null);
+      setCode("");
+      setError(null);
+      console.log("[INFO] reset: Active memory cleared.");
+    } catch (err: any) {
+      console.error(`[ERROR] reset execution failed:`, err.message);
+    } finally {
+      console.log("[END] reset session execution.");
+    }
   }
 
   // ===== PROVISIONING =====
@@ -245,10 +262,9 @@ export function LiquidOS() {
           </div>
         </div>
 
-        {/* THE MODULE LIBRARY TRIGGER: Supports Zyyo case industri switching */}
         <button
           onClick={() => {
-            console.log("[NAV_EVENT]: Returning to Selection Grid.");
+            console.log("[INFO] Returning to Selection Grid.");
             setPhase({ kind: "selection", carton: phase.carton });
           }}
           className="flex items-center gap-2 w-full px-3 py-2.5 mb-2 text-[11px] font-bold text-[#007AFF] uppercase tracking-[0.12em] bg-blue-50/40 hover:bg-blue-50 border border-blue-100/30 rounded-[14px] transition-all active:scale-[0.98]"
@@ -261,7 +277,6 @@ export function LiquidOS() {
           Screens
         </p>
 
-        {/* THE SIDEBAR SCROLL FIX: Viewport constrained height */}
         <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col gap-1.5 pr-1 max-h-[calc(100vh-280px)]">
           {screens.map((s) => {
             const active = s === current;
@@ -316,7 +331,12 @@ export function LiquidOS() {
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-20">
           {bites.map((nb) => (
-            <NanoBiteRenderer key={nb.id} spec={nb} carton={phase.carton} subModule={phase.subModule} />
+            <NanoBiteRenderer 
+              key={nb.id} 
+              spec={nb} 
+              carton={phase.carton} 
+              subModule={phase.subModule} 
+            />
           ))}
         </div>
       </main>
@@ -333,18 +353,43 @@ function NanoBiteRenderer({
   carton: VerticalCarton;
   subModule: SubModule;
 }): ReactNode {
-  const Component = PHYSICAL_LEGO_BRIDGE[spec.id];
+  console.log(`[BEGIN] NanoBiteRenderer execution for spec.id: ${spec.id}`);
+  let Component = null;
 
+  try {
+    const expectedFileName = ATOM_FILE_MAP[spec.id];
+    
+    if (expectedFileName) {
+      console.log(`[INFO] NanoBiteRenderer: Registry mapped ${spec.id} to filename ${expectedFileName}.tsx. Scanning glob...`);
+      
+      // Attempt to locate the file in the eager load array
+      const match = Object.entries(rawAtoms).find(([path]) => path.endsWith(`/${expectedFileName}.tsx`));
+      
+      if (match) {
+        console.log(`[INFO] NanoBiteRenderer: Physical atom located at ${match[0]}`);
+        Component = (match[1] as any).default;
+      } else {
+        console.warn(`[WARN] NanoBiteRenderer: File ${expectedFileName}.tsx mapped, but not found in src/components/nanobites/. Proceeding with Dynamic fallback.`);
+      }
+    } else {
+      console.log(`[INFO] NanoBiteRenderer: No hard mapping found for ${spec.id}. Proceeding with Dynamic fallback.`);
+    }
+  } catch (err: any) {
+    console.error(`[ERROR] NanoBiteRenderer physical mapping failed:`, err.message);
+  } finally {
+    console.log(`[END] NanoBiteRenderer atom resolution phase for spec.id: ${spec.id}`);
+  }
+
+  // If a physical file matched successfully, hydrate it
   if (Component) {
-    console.log(`[PHYSICAL_BRIDGE]: START - Hydrating physical atom for ${spec.id}`);
     return (
       <SovereignWrapper id={spec.id}>
-        {/* THE FIX: Cast raw to any to access business_id without TS error */}
         <Component businessId={(carton.raw as any)?.business_id || "default"} />
       </SovereignWrapper>
     );
   }
 
+  // Fallback to purely generic UI engine if no physical component exists in the file structure
   return (
     <DynamicNanoBite
       spec={spec}
@@ -383,7 +428,7 @@ function DynamicNanoBite({
     getExecutionsFor(spec.id, cartonCode),
   );
   const [input, setInput] = useState("");
-  const [rail, setRail] = useState<"USD" | "USDC">("USD");
+  const [rail, setRail] = useState<"Fiat" | "Platform Credits">("Fiat");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -393,20 +438,25 @@ function DynamicNanoBite({
   }, [spec.id, cartonCode]);
 
   async function execute() {
+    console.log(`[BEGIN] DynamicNanoBite execute() for task: ${spec.id}`);
     setBusy(true);
-    console.log(`[ATOM_EXECUTION]: START - Dispatching task: ${spec.id}`);
+    
     try {
       const payload: Record<string, unknown> = {
         microElement: spec.microElement,
         screen: spec.screen,
       };
+      
       if (isPayment) {
         const amount = parseFloat(input || "0") || 0;
         payload.amount = amount;
         payload.rail = rail;
+        console.log(`[INFO] DynamicNanoBite: Processing POS payment. Amount: ${amount}, Rail: ${rail}`);
       } else if (input.trim()) {
         payload.input = input.trim();
+        console.log(`[INFO] DynamicNanoBite: Processing generic execution. Input: ${payload.input}`);
       }
+      
       recordExecution({
         cartonCode,
         subModuleId,
@@ -415,12 +465,14 @@ function DynamicNanoBite({
         action: isPayment ? "pos.charge" : "execute",
         payload,
       });
+      
       setInput("");
-      console.log(`[ATOM_EXECUTION]: END - Task ${spec.id} recorded.`);
+      console.log(`[INFO] DynamicNanoBite: Task ${spec.id} committed to execution ledger successfully.`);
     } catch (err: any) {
-      console.error(`[ATOM_EXECUTION]: ERROR - Task ${spec.id} failed:`, err.message);
+      console.error(`[ERROR] DynamicNanoBite execute() failed:`, err.message);
     } finally {
       setBusy(false);
+      console.log(`[END] DynamicNanoBite execute() for task: ${spec.id}`);
     }
   }
 
@@ -459,7 +511,7 @@ function DynamicNanoBite({
       {isPayment ? (
         <>
           <div className="flex gap-2">
-            {(["USD", "USDC"] as const).map((r) => (
+            {(["Fiat", "Platform Credits"] as const).map((r) => (
               <button
                 key={r}
                 onClick={() => setRail(r)}
@@ -471,7 +523,7 @@ function DynamicNanoBite({
                   ...(rail === r ? { background: "var(--idia-gradient)" } : {}),
                 }}
               >
-                {r === "USD" ? "USD · Fiat" : "USDC · Digital"}
+                {r === "Fiat" ? "Fiat (FBO)" : "Platform Credits"}
               </button>
             ))}
           </div>
