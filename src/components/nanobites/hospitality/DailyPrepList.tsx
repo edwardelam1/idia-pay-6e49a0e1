@@ -1,5 +1,5 @@
 /** * NANO-BITE ID: hosp.ft.ops.prep
- * NANO-BITE NAME: Operational Demand Manifest (ODM)
+ * NANO-BITE NAME: DailyPrepList
  * ROLE: Daily 
  * INDUSTRY: tertiary.hospitality.food_truck 
  */
@@ -30,7 +30,7 @@ export interface PrepItem {
   station: 'Cold' | 'Griddle' | 'Assembly';
 }
 
-export default function OperationalDemandManifest({ businessId = "default" }: { businessId?: string }) {
+export default function DailyPrepList({ businessId = "default" }: { businessId?: string }) {
   const [logs, setLogs] = useState<PrepItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [step, setStep] = useState<"list" | "entry">("list");
@@ -57,11 +57,11 @@ export default function OperationalDemandManifest({ businessId = "default" }: { 
   // DISCOVERY LOGIC: LIQUID OS ARTIFACT RESOLUTION
   // ============================================================================
   const discoveryEngine = async () => {
-    console.log(`[DISCOVERY_START]: Resonating for ODM Registry at: ${businessId}`);
+    console.log(`[DISCOVERY_START]: Resonating for Daily Prep List at: ${businessId}`);
     setLoading(true);
     
     try {
-      // 1. Resolve manifest mapping from the Registry (Supabase Map)
+      // 1. Resolve list mapping from the Registry (Supabase Map)
       const { data, error } = await (supabase.from('daily_prep_list' as any)
         .select('*')
         .eq('business_id', businessId) as any);
@@ -77,7 +77,7 @@ export default function OperationalDemandManifest({ businessId = "default" }: { 
       setLogs(artifactMapping);
       console.log(`[DISCOVERY_SUCCESS]: ${artifactMapping.length} artifacts materialized from ledger.`);
     } catch (err: any) {
-      console.error(`[DISCOVERY_STALL]: Manifest resolution failed: ${err.message}`);
+      console.error(`[DISCOVERY_STALL]: Daily Prep List failed: ${err.message}`);
       toast.error("Discovery Failed: Artifact registry unreachable.");
     } finally {
       setLoading(false);
@@ -120,7 +120,7 @@ export default function OperationalDemandManifest({ businessId = "default" }: { 
       setLogs(prev => [...prev, { ...data, need: Math.max(0, data.par_level - data.on_hand) }]);
       setStep("list");
       console.log(`[TRANSACTION_DATA]: Artifact ${data.location} vaulted successfully.`);
-      toast.success("Manifest record vaulted.");
+      toast.success("List Archived.");
     } catch (err: any) {
       console.error("[TRANSACTION_STALL]: Vaulting failed:", err.message);
       toast.error("Stall: Failed to commit to ledger.");
@@ -141,7 +141,7 @@ export default function OperationalDemandManifest({ businessId = "default" }: { 
         item_name: item.item_name,
         quantity_needed: item.need,
         unit: item.unit,
-        source: 'truck_odm_manifest',
+        source: 'Daily_Prep_List',
         status: 'pending_restock'
       }));
 
@@ -177,8 +177,8 @@ export default function OperationalDemandManifest({ businessId = "default" }: { 
             <ClipboardList size={22} />
           </div>
           <div className="flex flex-col">
-            <h1 className="text-xl font-black tracking-tighter text-[#1D1D1F]">ODM</h1>
-            <span className="text-[10px] font-bold text-[#86868B] uppercase tracking-[0.12em]">Demand Manifest</span>
+            <h1 className="text-xl font-black tracking-tighter text-[#1D1D1F]">DPL</h1>
+            <span className="text-[10px] font-bold text-[#86868B] uppercase tracking-[0.12em]">Daily Prep List</span>
           </div>
         </div>
         <Button 
