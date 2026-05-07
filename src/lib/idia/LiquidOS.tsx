@@ -55,6 +55,7 @@ export function LiquidOS() {
   const [loading, setLoading] = useState(false);
 
   // --- MOBILE FIRST GESTURE & SIDEBAR STATE ---
+  // THE LAW: Default is exposed/uncollapsed
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
 
@@ -98,7 +99,6 @@ export function LiquidOS() {
     try {
       console.log(`[INFO] executeProvisioning: Fetching provisioning blueprint.`);
       
-      // THE DIAGNOSTIC LOG: See exactly what the registry returns
       const carton = await fetchProvisioningBlueprint(provisionCode);
       console.log(`[DIAGNOSTIC]: Payload returned from registry in this environment:`, carton);
       
@@ -111,10 +111,12 @@ export function LiquidOS() {
       }
 
       console.log(`[INFO] executeProvisioning: Manifest retrieved with ${carton.subModules.length} submodules.`);
-      // ... rest of the function stays exactly the same
       
       localStorage.setItem(PROVISION_KEY, provisionCode);
       console.log(`[SESSION_DATA]: Hardware anchor secured in LocalStorage.`);
+
+      // THE LAW: Maintain default exposed state on launch, regardless of module count.
+      setIsSidebarOpen(true); 
 
       if (carton.subModules.length === 1) {
         const sm = carton.subModules[0];
@@ -122,10 +124,8 @@ export function LiquidOS() {
         console.log(`[INFO] executeProvisioning: Single sub-module optimization triggered for: ${sm.id}`);
         setActiveScreen(tags[0] ?? null);
         setPhase({ kind: "operational", carton, subModule: sm });
-        setIsSidebarOpen(false); // Auto-hide on single module
       } else {
         setPhase({ kind: "selection", carton });
-        setIsSidebarOpen(true); // Open to allow selection
       }
     } catch (err: any) {
       console.error(`[ERROR] executeProvisioning failed:`, err.message, err.stack);
@@ -149,7 +149,9 @@ export function LiquidOS() {
       const tags = uniqueScreens(sm);
       setActiveScreen(tags[0] ?? null);
       setPhase({ kind: "operational", carton, subModule: sm });
-      setIsSidebarOpen(false); // Auto-hide sidebar upon selection
+      
+      // Auto-hide ONLY upon an explicit user selection
+      setIsSidebarOpen(false); 
       console.log(`[INFO] chooseSubModule: Stage built with ${tags.length} screens.`);
     } catch (err: any) {
       console.error(`[ERROR] chooseSubModule execution failed:`, err.message);
@@ -167,7 +169,7 @@ export function LiquidOS() {
       setActiveScreen(null);
       setCode("");
       setError(null);
-      setIsSidebarOpen(true); // Reset view state
+      setIsSidebarOpen(true); 
       console.log("[SESSION_END]: Active memory and hardware anchor cleared. Terminal unlocked.");
     } catch (err: any) {
       console.error(`[ERROR] reset execution failed:`, err.message);
@@ -361,7 +363,8 @@ export function LiquidOS() {
                 key={s}
                 onClick={() => {
                   setActiveScreen(s);
-                  setIsSidebarOpen(false); // Auto-hide upon Nano-Bite screen selection
+                  // Auto-hide upon Nano-Bite screen selection
+                  setIsSidebarOpen(false); 
                 }}
                 className={`text-left h-10 px-3 text-[13px] font-medium transition-all shrink-0 ${
                   active ? "text-white shadow-sm" : "text-foreground hover:bg-secondary"
@@ -391,7 +394,6 @@ export function LiquidOS() {
         </div>
       </aside>
 
-      {/* Main takes full width, off-canvas overlays it */}
       <main className="flex-1 w-full px-2 py-6 sm:px-10 sm:py-10 overflow-y-auto h-screen custom-scrollbar">
         <header className="flex items-center justify-between mb-8 pl-4">
           <div>
