@@ -4,7 +4,8 @@
  * INDUSTRY: tertiary.hospitality.food_truck 
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
+import { supabase } from '@/integrations/supabase/client';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,28 +19,25 @@ import { AlertCircle, Plus, ChevronLeft, PackageSearch, Save } from "lucide-reac
 // SCHEMAS
 // ============================================================================
 export interface InventoryItem {
-  id: string; // Internal database ID
+  id: string; // Internal database ID (public.inventory_items)
   sku: string;
   name: string;
-  category: "Perishables" | "Dry Goods" | "Packaging";
+  category: "Perishables" | "Dry Goods" | "Packaging" | string;
   uom: string; // Unit of Measure (e.g., Lbs, Sleeves, Jugs)
   parLevel: number;
   currentCount: number | '';
+  previousCount: number; // For variance calculation
   needsReview: boolean;
 }
 
 export interface CommissaryRestockProps {
   businessId?: string;
-  savedInventory?: InventoryItem[];
-  onCommitInventoryItem?: (item: Omit<InventoryItem, 'currentCount' | 'needsReview'>) => Promise<boolean>;
-  onSubmitRestockManifest?: (payload: any) => Promise<boolean>;
+  locationId?: string;
 }
 
 export default function CommissaryRestock({
   businessId = "default",
-  savedInventory = [],
-  onCommitInventoryItem,
-  onSubmitRestockManifest
+  locationId = "default",
 }: CommissaryRestockProps) {
 
   // --- STATE MACHINE ---
@@ -48,13 +46,14 @@ export default function CommissaryRestock({
   const [activeTab, setActiveTab] = useState<string>("Perishables");
   
   // Operational State
-  const [inventory, setInventory] = useState<InventoryItem[]>(savedInventory);
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [requiresUrgentDelivery, setRequiresUrgentDelivery] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   // Master Data Creation State
   const [newItemName, setNewItemName] = useState("");
-  const [newItemCategory, setNewItemCategory] = useState<"Perishables" | "Dry Goods" | "Packaging">("Perishables");
+  const [newItemCategory, setNewItemCategory] = useState<"Perishables" | "Dry Goods" | "Packaging" | string>("Perishables");
   const [newItemUom, setNewItemUom] = useState("");
   const [newItemPar, setNewItemPar] = useState("");
   const [creationError, setCreationError] = useState<string | null>(null);
@@ -68,7 +67,66 @@ export default function CommissaryRestock({
   }, []);
 
   // ============================================================================
-  // WORKFLOW: MASTER DATA CREATION (Data Entry)
+  // SUPABASE: FETCH INVENTORY DATA
+  // ============================================================================
+  const fetchInventory = useCallback(async () => {
+    console.log(`[BEGIN] fetchInventory execution`);
+    setIsLoading(true);
+    try {
+      // Join inventory_items with location_inventory
+      const { data, error } = await supabase
+        .from('inventory_items')
+        .select(`
+          id, vendor_sku, name, category, unit_of_measure, par_level,
+          location_inventory ( current_stock )
+        `)
+        .eq('business_id', businessId)
+        .eq('is_active', true);
+
+      if (error) throw error;
+
+      if (data) {
+        const formattedData: InventoryItem[] = data.map((item: any) => {
+          // Handle array return from Supabase relationship
+          const locInvObj = Array.isArray(item.location_inventory) 
+            ? item.location_inventory[0] 
+            : item.location_inventory;
+            
+          const stock = locInvObj?.current_stock || 0;
+          
+          return {
+            id: item.id,
+            sku: item.vendor_sku || item.id.substring(0, 8),
+            name: item.name,
+            category: item.category,
+            uom: item.unit_of_measure,
+            parLevel: item.par_level || 0,
+            currentCount: '',
+            previousCount: stock,
+            needsReview: false
+          };
+        });
+        setInventory(formattedData);
+        console.log(`[INFO] fetchInventory: Fetched and formatted ${formattedData.length} items.`);
+      }
+    } catch (err: any) {
+      console.error("[ERROR] Failed to fetch inventory:", err.message);
+    } finally {
+      setIsLoading(false);
+      console.log(`[END] fetchInventory execution`);
+    }
+  }, [businessId]);
+
+  useEffect(() => {
+    if (businessId !== "default") {
+      fetchInventory();
+    } else {
+      setIsLoading(false);
+    }
+  }, [businessId, fetchInventory]);
+
+  // ============================================================================
+  // SUPABASE: MASTER DATA CREATION
   // ============================================================================
   const handleCreateMasterItem = async () => {
     console.log(`[BEGIN] handleCreateMasterItem execution`);
@@ -84,34 +142,48 @@ export default function CommissaryRestock({
       const parsedPar = parseInt(newItemPar, 10);
       if (isNaN(parsedPar) || parsedPar <= 0) throw new Error("Par Level must be a valid number greater than 0.");
 
-      const generatedSku = `${newItemCategory.substring(0, 2).toUpperCase()}-${Date.now().toString().slice(-4)}`;
-      
-      const newItemPayload = {
-        id: `inv_${Date.now()}`,
-        sku: generatedSku,
-        name: newItemName.trim(),
-        category: newItemCategory,
-        uom: newItemUom.trim(),
-        parLevel: parsedPar,
-      };
+      // 1. Insert into public.inventory_items
+      const { data: itemData, error: itemError } = await supabase
+        .from('inventory_items')
+        .insert({
+          business_id: businessId,
+          name: newItemName.trim(),
+          category: newItemCategory,
+          unit_of_measure: newItemUom.trim(),
+          par_level: parsedPar,
+          is_active: true
+        })
+        .select()
+        .single();
 
-      console.log(`[INFO] handleCreateMasterItem: Payload generated`, newItemPayload);
+      if (itemError) throw itemError;
 
-      if (onCommitInventoryItem) {
-        await onCommitInventoryItem(newItemPayload);
+      // 2. Initialize stock zero-state in public.location_inventory
+      if (locationId !== "default") {
+        const { error: locError } = await supabase
+          .from('location_inventory')
+          .insert({
+            location_id: locationId,
+            inventory_item_id: itemData.id,
+            current_stock: 0,
+            par_level: itemData.par_level
+          });
+        
+        if (locError) throw locError;
       }
 
-      // Inject into active count session
-      setInventory(prev => [...prev, { ...newItemPayload, currentCount: '', needsReview: false }]);
+      console.log(`[INFO] handleCreateMasterItem: Item ${itemData.id} committed successfully.`);
+
+      // Refresh list to pull fresh database state
+      await fetchInventory();
       
       // Reset Form State
       setNewItemName("");
       setNewItemUom("");
       setNewItemPar("");
-      setActiveTab(newItemCategory); // Switch view to the category just added to
+      setActiveTab(newItemCategory);
       setView("count_execution");
       
-      console.log(`[INFO] handleCreateMasterItem: Item committed successfully.`);
     } catch (error: any) {
       console.error(`[ERROR] handleCreateMasterItem failed:`, error.message);
       setCreationError(error.message);
@@ -123,7 +195,7 @@ export default function CommissaryRestock({
   };
 
   // ============================================================================
-  // WORKFLOW: COUNT EXECUTION (Data Entry)
+  // SUPABASE: COUNT EXECUTION & MANIFEST SUBMISSION
   // ============================================================================
   const handleCountChange = (id: string, val: string) => {
     console.log(`[BEGIN] handleCountChange execution for id: ${id}, val: ${val}`);
@@ -158,22 +230,49 @@ export default function CommissaryRestock({
         return;
       }
 
-      const payload = {
-        businessId,
-        timestamp: new Date().toISOString(),
-        urgentDelivery: requiresUrgentDelivery,
-        data: inventory
-      };
+      console.log("[INFO] submitRestockManifest: Synchronizing ledgers...");
 
-      console.log("[INFO] submitRestockManifest: Payload compiled.", payload);
-      
-      if (onSubmitRestockManifest) {
-        await onSubmitRestockManifest(payload);
+      // Write cycles to DB
+      for (const item of inventory) {
+        const newCount = item.currentCount as number;
+        const variance = newCount - item.previousCount;
+
+        // 1. Log to inventory_adjustments ONLY if count changed (variance !== 0)
+        if (variance !== 0) {
+          const { error: adjError } = await supabase.from('inventory_adjustments').insert({
+            business_id: businessId,
+            location_id: locationId,
+            adjustment_number: `CYC-${Date.now().toString().slice(-6)}`,
+            inventory_item_id: item.id,
+            adjustment_type: 'cycle_count',
+            quantity_before: item.previousCount,
+            adjustment_quantity: variance,
+            quantity_after: newCount,
+            reason: 'Weekly Commissary Restock Execution'
+          });
+          if (adjError) console.error(`[ERROR] Failed writing adjustment for ${item.id}:`, adjError);
+        }
+
+        // 2. Update location_inventory
+        if (locationId !== "default") {
+          const { error: updateError } = await supabase
+            .from('location_inventory')
+            .update({ 
+              current_stock: newCount, 
+              last_counted_at: new Date().toISOString() 
+            })
+            .eq('inventory_item_id', item.id)
+            .eq('location_id', locationId);
+            
+          if (updateError) console.error(`[ERROR] Failed updating stock for ${item.id}:`, updateError);
+        }
       }
       
-      alert(`Restock manifest submitted successfully for ${inventory.length} items.`);
-    } catch (error) {
-      console.error(`[ERROR] submitRestockManifest failed:`, error);
+      alert(`Restock manifest synchronized successfully.`);
+      await fetchInventory(); // Refresh baselines
+      
+    } catch (error: any) {
+      console.error(`[ERROR] submitRestockManifest failed:`, error.message);
       alert("System Error: Failed to submit restock manifest.");
     } finally {
       setIsProcessing(false);
@@ -291,7 +390,11 @@ export default function CommissaryRestock({
         </Button>
       </div>
 
-      {inventory.length === 0 ? (
+      {isLoading ? (
+        <div className="flex flex-col items-center justify-center flex-1 p-6 text-center">
+          <p className="text-muted-foreground">Connecting to Ledger...</p>
+        </div>
+      ) : inventory.length === 0 ? (
         <div className="flex flex-col items-center justify-center flex-1 p-6 text-center">
           <PackageSearch className="h-20 w-20 text-muted-foreground opacity-20 mb-6" />
           <h2 className="text-2xl font-bold tracking-tight">Master Catalog Empty</h2>
@@ -385,7 +488,7 @@ export default function CommissaryRestock({
       )}
 
       {/* Sticky Footer */}
-      {inventory.length > 0 && (
+      {inventory.length > 0 && !isLoading && (
         <div className="fixed bottom-0 left-0 w-full bg-background border-t p-4 pb-8 shadow-[0_-10px_40px_rgba(0,0,0,0.1)] z-50">
           <Button 
             size="lg" 
