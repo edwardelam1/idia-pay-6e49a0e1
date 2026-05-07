@@ -1,6 +1,6 @@
 /** * NANO-BITE ID: hosp.ft.ops.restock
- * NANO-BITE NAME: Commissary restock
- * ROLE: Weekly
+ * NANO-BITE NAME: Commissary Restock & Recipe Engine
+ * ROLE: Operations / Menu Engineering / Weekly Restock
  * INDUSTRY: tertiary.hospitality.food_truck 
  */
 
@@ -13,21 +13,49 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { AlertCircle, Plus, ChevronLeft, PackageSearch, Save } from "lucide-react";
+import { 
+  AlertCircle, Plus, ChevronLeft, PackageSearch, 
+  Save, Truck, ChefHat, Search, UtensilsCrossed, 
+  Layers, X, DollarSign, Trash2
+} from "lucide-react";
+import { toast } from "sonner";
 
 // ============================================================================
-// SCHEMAS
+// STRICT DATA SCHEMAS
 // ============================================================================
 export interface InventoryItem {
-  id: string; // Internal database ID (public.inventory_items)
+  id: string; 
   sku: string;
   name: string;
   category: "Perishables" | "Dry Goods" | "Packaging" | string;
-  uom: string; // Unit of Measure (e.g., Lbs, Sleeves, Jugs)
+  uom: string; 
   parLevel: number;
   currentCount: number | '';
-  previousCount: number; // For variance calculation
+  previousCount: number; 
   needsReview: boolean;
+  odmDemand?: number; // Live Demand Signal from the Truck (ODM)
+}
+
+export interface BaseIngredient {
+  inventory_id: string;
+  name: string;
+  quantity: number;
+  uom: string;
+}
+
+export interface ModOption {
+  id: string; 
+  name: string;
+  priceDelta: number;
+  quantity: number;
+  uom: string;
+}
+
+export interface ModGroup {
+  id: string;
+  name: string;
+  isRequired: boolean;
+  options: ModOption[];
 }
 
 export interface CommissaryRestockProps {
@@ -40,60 +68,75 @@ export default function CommissaryRestock({
   locationId = "default",
 }: CommissaryRestockProps) {
 
-  // --- STATE MACHINE ---
-  type ViewState = "count_execution" | "create_item";
+  // --- STRICT STATE MACHINE ---
+  type ViewState = "count_execution" | "create_item" | "recipe_select" | "recipe_build";
   const [view, setView] = useState<ViewState>("count_execution");
-  const [activeTab, setActiveTab] = useState<string>("Perishables");
   
-  // Operational State
+  // Tab States
+  const [inventoryTab, setInventoryTab] = useState<string>("Perishables");
+  const [recipeTab, setRecipeTab] = useState<"base" | "modifiers">("base");
+  
+  // Data States
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [menuItems, setMenuItems] = useState<any[]>([]);
   const [requiresUrgentDelivery, setRequiresUrgentDelivery] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   // Master Data Creation State
   const [newItemName, setNewItemName] = useState("");
-  const [newItemCategory, setNewItemCategory] = useState<"Perishables" | "Dry Goods" | "Packaging" | string>("Perishables");
+  const [newItemCategory, setNewItemCategory] = useState<string>("Perishables");
   const [newItemUom, setNewItemUom] = useState("");
   const [newItemPar, setNewItemPar] = useState("");
   const [creationError, setCreationError] = useState<string | null>(null);
 
+  // Recipe Builder State
+  const [selectedMenu, setSelectedMenu] = useState<any>(null);
+  const [baseRecipe, setBaseRecipe] = useState<BaseIngredient[]>([]);
+  const [modGroups, setModGroups] = useState<ModGroup[]>([]);
+  const [recipeSearchTerm, setRecipeSearchTerm] = useState("");
+
   const triggerHaptic = useCallback((type: 'light' | 'heavy' = 'light') => {
     try {
-      if (typeof window !== 'undefined' && window.navigator && window.navigator.vibrate) {
+      if (typeof window !== 'undefined' && window.navigator?.vibrate) {
         window.navigator.vibrate(type === 'heavy' ? [50, 50, 50] : 50);
       }
-    } catch (e) { /* Hardware agnostic fallback */ }
+    } catch (e) { /* hardware agnostic */ }
   }, []);
 
   // ============================================================================
-  // SUPABASE: FETCH INVENTORY DATA
+  // SUPABASE: UNIFIED LEDGER HYDRATION
   // ============================================================================
-  const fetchInventory = useCallback(async () => {
-    console.log(`[BEGIN] fetchInventory execution`);
+  const fetchLedgers = useCallback(async () => {
+    console.log(`[DATA_HYDRATION]: START - Resolving Inventory, Demand, and Menu Registries.`);
     setIsLoading(true);
     try {
-      // Join inventory_items with location_inventory
-      const { data, error } = await supabase
-        .from('inventory_items')
-        .select(`
-          id, vendor_sku, name, category, unit_of_measure, par_level,
-          location_inventory ( current_stock )
-        `)
+      // 1. Fetch Inventory Items
+      const invPromise = (supabase.from('inventory_items' as any)
+        .select(`id, vendor_sku, name, category, unit_of_measure, par_level`)
         .eq('business_id', businessId)
-        .eq('is_active', true);
+        .eq('is_active', true) as any);
 
-      if (error) throw error;
+      // 2. Fetch Live Demand Signals (ODM)
+      const demandPromise = (supabase.from('inventory_demand' as any)
+        .select('item_name, quantity_needed')
+        .eq('business_id', businessId)
+        .eq('status', 'pending_restock') as any);
 
-      if (data) {
-        const formattedData: InventoryItem[] = data.map((item: any) => {
-          // Handle array return from Supabase relationship
-          const locInvObj = Array.isArray(item.location_inventory) 
-            ? item.location_inventory[0] 
-            : item.location_inventory;
-            
-          const stock = locInvObj?.current_stock || 0;
-          
+      // 3. Fetch Menu Items (For Recipe Builder)
+      const menuPromise = (supabase.from('menu_items' as any)
+        .select('*')
+        .eq('business_id', businessId) as any);
+
+      const [invRes, demandRes, menuRes] = await Promise.all([invPromise, demandPromise, menuPromise]);
+
+      if (invRes.error) throw invRes.error;
+      if (menuRes.error) throw menuRes.error;
+
+      // Hydrate Inventory with ODM Demand Context
+      if (invRes.data) {
+        const formattedData: InventoryItem[] = invRes.data.map((item: any) => {
+          const activeDemand = demandRes.data?.find((d: any) => d.item_name === item.name);
           return {
             id: item.id,
             sku: item.vendor_sku || item.id.substring(0, 8),
@@ -102,402 +145,647 @@ export default function CommissaryRestock({
             uom: item.unit_of_measure,
             parLevel: item.par_level || 0,
             currentCount: '',
-            previousCount: stock,
-            needsReview: false
+            previousCount: 0, 
+            needsReview: false,
+            odmDemand: activeDemand?.quantity_needed || 0
           };
         });
         setInventory(formattedData);
-        console.log(`[INFO] fetchInventory: Fetched and formatted ${formattedData.length} items.`);
       }
+
+      // Hydrate Menu Items
+      if (menuRes.data) {
+        setMenuItems(menuRes.data);
+      }
+
+      console.log(`[DATA_HYDRATION]: SUCCESS - Unified ledgers synchronized.`);
     } catch (err: any) {
-      console.error("[ERROR] Failed to fetch inventory:", err.message);
+      console.error("[CRITICAL_FAILURE]: fetchLedgers Stalled:", err.message);
+      toast.error("Offline: Ledger synchronization failed.");
     } finally {
       setIsLoading(false);
-      console.log(`[END] fetchInventory execution`);
+      console.log(`[DATA_HYDRATION]: END - Sync complete.`);
     }
   }, [businessId]);
 
   useEffect(() => {
-    if (businessId !== "default") {
-      fetchInventory();
-    } else {
-      setIsLoading(false);
-    }
-  }, [businessId, fetchInventory]);
+    if (businessId !== "default") fetchLedgers();
+    else setIsLoading(false);
+  }, [businessId, fetchLedgers]);
 
   // ============================================================================
-  // SUPABASE: MASTER DATA CREATION
+  // OPERATIONS: COMMISSARY RESTOCK & MASTER ITEM CREATION
   // ============================================================================
   const handleCreateMasterItem = async () => {
-    console.log(`[BEGIN] handleCreateMasterItem execution`);
+    console.log(`[TRANSACTION_START]: Committing SKU to Master Inventory.`);
     setCreationError(null);
     setIsProcessing(true);
 
     try {
       triggerHaptic();
-      
-      // Inline Validation logic
       if (!newItemName.trim()) throw new Error("Item Name is required.");
-      if (!newItemUom.trim()) throw new Error("Unit of Measure is required.");
       const parsedPar = parseInt(newItemPar, 10);
-      if (isNaN(parsedPar) || parsedPar <= 0) throw new Error("Par Level must be a valid number greater than 0.");
 
-      // 1. Insert into public.inventory_items
-      const { data: itemData, error: itemError } = await supabase
-        .from('inventory_items')
+      const { data: itemData, error: itemError } = await (supabase.from('inventory_items' as any)
         .insert({
           business_id: businessId,
           name: newItemName.trim(),
           category: newItemCategory,
           unit_of_measure: newItemUom.trim(),
-          par_level: parsedPar,
+          par_level: isNaN(parsedPar) ? 0 : parsedPar,
           is_active: true
         })
         .select()
-        .single();
+        .single() as any);
 
       if (itemError) throw itemError;
 
-      // 2. Initialize stock zero-state in public.location_inventory
-      if (locationId !== "default") {
-        const { error: locError } = await supabase
-          .from('location_inventory')
-          .insert({
-            location_id: locationId,
-            inventory_item_id: itemData.id,
-            current_stock: 0,
-            par_level: itemData.par_level
-          });
-        
-        if (locError) throw locError;
-      }
-
-      console.log(`[INFO] handleCreateMasterItem: Item ${itemData.id} committed successfully.`);
-
-      // Refresh list to pull fresh database state
-      await fetchInventory();
+      console.log(`[TRANSACTION_DATA]: SKU ${itemData.id} Vaulted.`);
+      await fetchLedgers();
       
-      // Reset Form State
       setNewItemName("");
       setNewItemUom("");
       setNewItemPar("");
-      setActiveTab(newItemCategory);
       setView("count_execution");
+      toast.success("Master item archived to registry.");
       
     } catch (error: any) {
-      console.error(`[ERROR] handleCreateMasterItem failed:`, error.message);
+      console.error(`[TRANSACTION_STALL]: Creation failed:`, error.message);
       setCreationError(error.message);
       triggerHaptic('heavy');
     } finally {
       setIsProcessing(false);
-      console.log(`[END] handleCreateMasterItem execution`);
-    }
-  };
-
-  // ============================================================================
-  // SUPABASE: COUNT EXECUTION & MANIFEST SUBMISSION
-  // ============================================================================
-  const handleCountChange = (id: string, val: string) => {
-    console.log(`[BEGIN] handleCountChange execution for id: ${id}, val: ${val}`);
-    try {
-      const parsedVal: number | '' = val === '' ? '' : parseInt(val, 10);
-      
-      setInventory(prev => prev.map(item => {
-        if (item.id === id) {
-          // Inline Validation: Prevent silent errors on massive deviations
-          const reviewFlag = typeof parsedVal === 'number' && item.parLevel > 0 && parsedVal > (item.parLevel * 1.5);
-          return { ...item, currentCount: parsedVal, needsReview: reviewFlag };
-        }
-        return item;
-      }));
-    } catch (error) {
-      console.error(`[ERROR] handleCountChange failed:`, error);
-    } finally {
-      console.log(`[END] handleCountChange execution`);
     }
   };
 
   const submitRestockManifest = async () => {
-    console.log("[BEGIN] submitRestockManifest execution");
+    console.log("[TRANSACTION_START]: Synchronizing Restock Ledger with ODM Demand.");
     try {
       setIsProcessing(true);
       triggerHaptic('heavy');
       
-      // Verification
       const missingCounts = inventory.filter(item => item.currentCount === '');
       if (missingCounts.length > 0) {
-        alert("Action Blocked: Please complete all inventory counts before submitting.");
+        toast.error("Action Blocked: Complete all counts.");
         return;
       }
 
-      console.log("[INFO] submitRestockManifest: Synchronizing ledgers...");
-
-      // Write cycles to DB
       for (const item of inventory) {
-        const newCount = item.currentCount as number;
-        const variance = newCount - item.previousCount;
+        await (supabase.from('inventory_adjustments' as any).insert({
+          business_id: businessId,
+          inventory_item_id: item.id,
+          adjustment_type: 'restock',
+          adjustment_quantity: item.currentCount,
+          reason: 'ODM Shift Fulfillment'
+        }) as any);
 
-        // 1. Log to inventory_adjustments ONLY if count changed (variance !== 0)
-        if (variance !== 0) {
-          const { error: adjError } = await supabase.from('inventory_adjustments').insert({
-            business_id: businessId,
-            location_id: locationId,
-            adjustment_number: `CYC-${Date.now().toString().slice(-6)}`,
-            inventory_item_id: item.id,
-            adjustment_type: 'cycle_count',
-            quantity_before: item.previousCount,
-            adjustment_quantity: variance,
-            quantity_after: newCount,
-            reason: 'Weekly Commissary Restock Execution'
-          });
-          if (adjError) console.error(`[ERROR] Failed writing adjustment for ${item.id}:`, adjError);
-        }
-
-        // 2. Update location_inventory
-        if (locationId !== "default") {
-          const { error: updateError } = await supabase
-            .from('location_inventory')
-            .update({ 
-              current_stock: newCount, 
-              last_counted_at: new Date().toISOString() 
-            })
-            .eq('inventory_item_id', item.id)
-            .eq('location_id', locationId);
-            
-          if (updateError) console.error(`[ERROR] Failed updating stock for ${item.id}:`, updateError);
+        if (item.odmDemand && item.odmDemand > 0) {
+          await (supabase.from('inventory_demand' as any)
+            .update({ status: 'fulfilled', fulfilled_at: new Date().toISOString() })
+            .eq('item_name', item.name)
+            .eq('business_id', businessId) as any);
         }
       }
       
-      alert(`Restock manifest synchronized successfully.`);
-      await fetchInventory(); // Refresh baselines
+      toast.success("Restock manifest synchronized. ODM fulfilled.");
+      await fetchLedgers(); 
       
     } catch (error: any) {
-      console.error(`[ERROR] submitRestockManifest failed:`, error.message);
-      alert("System Error: Failed to submit restock manifest.");
+      console.error(`[TRANSACTION_STALL]: Submission failed:`, error.message);
+      toast.error("Stall: Ledger synchronization failed.");
     } finally {
       setIsProcessing(false);
-      console.log("[END] submitRestockManifest execution");
     }
   };
 
-  const activeItems = inventory.filter(i => i.category === activeTab);
+  // ============================================================================
+  // OPERATIONS: RECIPE BUILDER LOGIC
+  // ============================================================================
+  const selectMenuTarget = (item: any) => {
+    triggerHaptic();
+    setSelectedMenu(item);
+    setBaseRecipe(item.recipe_ingredients || []);
+    setModGroups(item.modifier_groups || []);
+    setView("recipe_build");
+    setRecipeTab("base");
+  };
+
+  const addBaseIngredient = (invItem: any) => {
+    if (baseRecipe.find(i => i.inventory_id === invItem.id)) {
+      toast.error("Ingredient already in base recipe.");
+      return;
+    }
+    triggerHaptic();
+    setBaseRecipe([...baseRecipe, {
+      inventory_id: invItem.id,
+      name: invItem.name,
+      quantity: 1,
+      uom: invItem.unit_of_measure || invItem.uom
+    }]);
+  };
+
+  const updateBaseQty = (id: string, qty: number) => {
+    setBaseRecipe(prev => prev.map(i => i.inventory_id === id ? { ...i, quantity: qty } : i));
+  };
+
+  const removeBaseIngredient = (id: string) => {
+    triggerHaptic('heavy');
+    setBaseRecipe(prev => prev.filter(i => i.inventory_id !== id));
+  };
+
+  const addModifierGroup = () => {
+    triggerHaptic();
+    const newGroup: ModGroup = { id: `grp-${Date.now()}`, name: "New Customization", isRequired: false, options: [] };
+    setModGroups([...modGroups, newGroup]);
+  };
+
+  const updateModGroup = (id: string, updates: Partial<ModGroup>) => {
+    setModGroups(prev => prev.map(g => g.id === id ? { ...g, ...updates } : g));
+  };
+
+  const deleteModGroup = (id: string) => {
+    triggerHaptic('heavy');
+    setModGroups(prev => prev.filter(g => g.id !== id));
+  };
+
+  const addOptionToGroup = (groupId: string, invItem: any) => {
+    triggerHaptic();
+    setModGroups(prev => prev.map(g => {
+      if (g.id === groupId) {
+        if (g.options.find(o => o.id === invItem.id)) return g;
+        return {
+          ...g,
+          options: [...g.options, {
+            id: invItem.id, 
+            name: invItem.name,
+            priceDelta: 0,
+            quantity: 1,
+            uom: invItem.unit_of_measure || invItem.uom
+          }]
+        };
+      }
+      return g;
+    }));
+  };
+
+  const updateOption = (groupId: string, optionId: string, updates: Partial<ModOption>) => {
+    setModGroups(prev => prev.map(g => {
+      if (g.id === groupId) return { ...g, options: g.options.map(o => o.id === optionId ? { ...o, ...updates } : o) };
+      return g;
+    }));
+  };
+
+  const removeOption = (groupId: string, optionId: string) => {
+    triggerHaptic('heavy');
+    setModGroups(prev => prev.map(g => {
+      if (g.id === groupId) return { ...g, options: g.options.filter(o => o.id !== optionId) };
+      return g;
+    }));
+  };
+
+  const commitRecipeToLedger = async () => {
+    console.log(`[TRANSACTION_START]: Committing Artifacts for ${selectedMenu.id}`);
+    setIsProcessing(true);
+    triggerHaptic('heavy');
+
+    try {
+      const { error } = await (supabase.from('menu_items' as any)
+        .update({ 
+          recipe_ingredients: baseRecipe,
+          modifier_groups: modGroups 
+        })
+        .eq('id', selectedMenu.id) as any);
+
+      if (error) throw error;
+
+      console.log(`[TRANSACTION_DATA]: Menu Item synchronized with production logic.`);
+      toast.success("Recipe and Modifiers vaulted successfully.");
+      setView("recipe_select");
+      fetchLedgers(); 
+    } catch (err: any) {
+      console.error("[TRANSACTION_STALL]: Commit failed:", err.message);
+      toast.error("Stall: Could not update the ledger.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   // ============================================================================
-  // RENDER: MASTER DATA CREATION VIEW
+  // RENDER BLOCKS (The Law applies everywhere)
   // ============================================================================
-  if (view === "create_item") {
-    return (
-      <div className="flex flex-col h-screen bg-background relative overflow-hidden animate-in slide-in-from-right">
-        <div className="pt-12 pb-4 px-4 bg-card border-b flex items-center gap-2 z-10">
-          <Button variant="ghost" onClick={() => { triggerHaptic(); setView("count_execution"); }} className="min-h-[44px]">
-            <ChevronLeft className="mr-2 h-5 w-5" /> Back
-          </Button>
-          <h1 className="text-xl font-bold tracking-tight">Create Master Item</h1>
-        </div>
+  if (isLoading) return <div className="h-screen flex items-center justify-center animate-pulse font-black text-xs uppercase tracking-widest text-[#86868B]">Hydrating Ledgers...</div>;
 
-        <ScrollArea className="flex-1 w-full px-6 py-8">
-          <div className="flex flex-col gap-8 pb-32">
-            
-            {creationError && (
-              <div className="p-4 bg-destructive/10 text-destructive border border-destructive/20 rounded-xl flex items-center gap-3">
-                <AlertCircle className="h-5 w-5 shrink-0" />
-                <span className="text-sm font-bold">{creationError}</span>
-              </div>
-            )}
+  return (
+    <div className="flex flex-col h-screen bg-[#F5F5F7] relative overflow-hidden">
+      
+      {/* ================================================================= */}
+      {/* VIEW: COUNT EXECUTION (RESTOCK HOME)                              */}
+      {/* ================================================================= */}
+      {view === "count_execution" && (
+        <div className="flex flex-col h-full relative pb-[120px] animate-in fade-in">
+          <header className="pt-12 pb-4 px-6 bg-white border-b flex justify-between items-center z-10 shadow-sm">
+            <div className="flex flex-col">
+              <h1 className="text-2xl font-black tracking-tighter text-[#1D1D1F]">Restock Manifest</h1>
+              <span className="text-[10px] font-bold text-[#86868B] uppercase tracking-widest">ODM Fulfillment</span>
+            </div>
+            <div className="flex gap-2">
+              {/* Navigate to Recipe Builder */}
+              <Button variant="outline" className="h-11 w-11 rounded-full p-0 border-2" onClick={() => { triggerHaptic(); setView("recipe_select"); }}>
+                <ChefHat size={20} />
+              </Button>
+              {/* Navigate to Create Item */}
+              <Button variant="outline" className="h-11 w-11 rounded-full p-0 border-2" onClick={() => { triggerHaptic(); setView("create_item"); }}>
+                <Plus size={24} />
+              </Button>
+            </div>
+          </header>
 
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="itemName" className="text-base font-bold text-muted-foreground uppercase tracking-wider">Item Name <span className="text-destructive">*</span></Label>
-              <Input 
-                id="itemName" 
-                value={newItemName} 
-                onChange={(e) => setNewItemName(e.target.value)} 
-                placeholder="e.g. Ground Beef (80/20)" 
-                className="min-h-[56px] text-lg bg-card"
-              />
+          <Tabs value={inventoryTab} onValueChange={setInventoryTab} className="w-full flex-1 flex flex-col">
+            <div className="bg-white border-b sticky top-0 z-10 px-4 py-2">
+              <TabsList className="w-full h-[48px] bg-[#F5F5F7] rounded-xl p-1">
+                {["Perishables", "Dry Goods", "Packaging"].map(cat => (
+                  <TabsTrigger key={cat} value={cat} className="flex-1 rounded-lg text-xs font-black uppercase tracking-tight">
+                    {cat}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
             </div>
 
-            <div className="flex flex-col gap-2">
-              <Label className="text-base font-bold text-muted-foreground uppercase tracking-wider">Category <span className="text-destructive">*</span></Label>
+            <ScrollArea className="flex-1">
+              <div className="p-4 pb-[200px] space-y-4">
+                {inventory.filter(i => i.category === inventoryTab).length === 0 ? (
+                  <div className="py-20 text-center">
+                    <PackageSearch className="mx-auto h-16 w-16 text-[#D2D2D7] mb-4" />
+                    <p className="text-[#86868B] font-bold">Category empty in master registry.</p>
+                  </div>
+                ) : (
+                  inventory.filter(i => i.category === inventoryTab).map((item) => (
+                    <Card key={item.id} className="border-none shadow-sm rounded-[24px] overflow-hidden bg-white">
+                      <CardContent className="p-6 space-y-4">
+                        <div className="flex justify-between items-start">
+                          <div className="flex flex-col">
+                            <h3 className="text-xl font-black text-[#1D1D1F]">{item.name}</h3>
+                            <span className="text-[11px] font-bold text-[#86868B] uppercase">SKU: {item.sku}</span>
+                          </div>
+                          
+                          {/* ODM DEMAND INDICATOR */}
+                          {item.odmDemand! > 0 && (
+                            <div className="bg-[#007AFF] text-white px-3 py-1 rounded-full flex items-center gap-1.5 animate-bounce">
+                              <Truck size={12} />
+                              <span className="text-[10px] font-black uppercase">Truck Needs {item.odmDemand}</span>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label className="text-[10px] font-black text-[#86868B] uppercase tracking-widest ml-1">Restock Quantity ({item.uom})</Label>
+                          <Input 
+                            type="number"
+                            inputMode="numeric"
+                            placeholder="Enter count..."
+                            value={item.currentCount}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setInventory(prev => prev.map(i => i.id === item.id ? { ...i, currentCount: val === '' ? '' : parseInt(val, 10) } : i));
+                            }}
+                            className="h-[60px] rounded-2xl text-2xl font-black bg-[#F5F5F7] border-transparent focus:border-[#007AFF] transition-all"
+                          />
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))
+                )}
+              </div>
+            </ScrollArea>
+          </Tabs>
+
+          {/* Restock Footer */}
+          {inventory.length > 0 && (
+            <div className="fixed bottom-0 left-0 w-full p-6 bg-white/90 backdrop-blur-xl border-t border-[#F2F2F7] z-20 space-y-4 animate-in slide-in-from-bottom">
+              <div className="flex items-center justify-between px-2">
+                <div className="flex flex-col">
+                  <span className="text-[10px] font-black text-[#86868B] uppercase">Logistics Status</span>
+                  <span className="text-sm font-bold text-[#1D1D1F]">Awaiting Shift Egress</span>
+                </div>
+                <div className="flex items-center gap-3">
+                   <span className="text-xs font-bold text-[#86868B]">Urgent</span>
+                   <Switch checked={requiresUrgentDelivery} onCheckedChange={(val) => { triggerHaptic(); setRequiresUrgentDelivery(val); }} />
+                </div>
+              </div>
+              <Button 
+                disabled={isProcessing || inventory.length === 0}
+                className="w-full h-[72px] text-xl font-black rounded-[24px] bg-[#34C759] text-white shadow-2xl active:scale-[0.98] transition-transform"
+                onClick={submitRestockManifest}
+              >
+                {isProcessing ? "Synchronizing..." : "SUBMIT RESTOCK MANIFEST"}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ================================================================= */}
+      {/* VIEW: CREATE MASTER ITEM                                          */}
+      {/* ================================================================= */}
+      {view === "create_item" && (
+        <div className="flex flex-col h-full relative animate-in slide-in-from-right">
+          <header className="pt-12 pb-4 px-6 bg-white border-b flex items-center gap-4 z-10 shadow-sm">
+            <Button variant="ghost" className="h-11 w-11 rounded-full p-0 bg-[#F5F5F7]" onClick={() => setView("count_execution")}>
+              <ChevronLeft size={24} />
+            </Button>
+            <h1 className="text-xl font-black uppercase tracking-tighter">New Master SKU</h1>
+          </header>
+
+          <ScrollArea className="flex-1 w-full">
+            <div className="p-6 space-y-8 pb-32 max-w-md mx-auto">
+              {creationError && (
+                <div className="p-4 bg-destructive/10 text-destructive border border-destructive/20 rounded-2xl flex items-center gap-3">
+                  <AlertCircle size={20} />
+                  <span className="text-sm font-bold">{creationError}</span>
+                </div>
+              )}
+
+              <div className="space-y-3">
+                <Label className="text-[10px] font-black text-[#86868B] uppercase tracking-widest ml-1">Item Name *</Label>
+                <Input value={newItemName} onChange={(e) => setNewItemName(e.target.value)} className="h-[60px] rounded-2xl text-lg font-bold border-2" placeholder="e.g. Diced Onions" />
+              </div>
+
+              <div className="space-y-3">
+                <Label className="text-[10px] font-black text-[#86868B] uppercase tracking-widest ml-1">Category *</Label>
+                <div className="grid grid-cols-1 gap-2">
+                  {["Perishables", "Dry Goods", "Packaging"].map(cat => (
+                    <button 
+                      key={cat}
+                      onClick={() => { triggerHaptic(); setNewItemCategory(cat); }}
+                      className={`h-[56px] rounded-2xl font-bold border-2 transition-all ${newItemCategory === cat ? 'bg-[#1D1D1F] text-white border-[#1D1D1F]' : 'bg-white border-[#D2D2D7] text-[#1D1D1F]'}`}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-3">
+                  <Label className="text-[10px] font-black text-[#86868B] uppercase tracking-widest ml-1">UOM *</Label>
+                  <Input value={newItemUom} onChange={(e) => setNewItemUom(e.target.value)} className="h-[60px] rounded-2xl font-bold border-2" placeholder="Lbs" />
+                </div>
+                <div className="space-y-3">
+                  <Label className="text-[10px] font-black text-[#86868B] uppercase tracking-widest ml-1">Par Level</Label>
+                  <Input type="number" value={newItemPar} onChange={(e) => setNewItemPar(e.target.value)} className="h-[60px] rounded-2xl font-bold border-2" placeholder="0" />
+                </div>
+              </div>
+            </div>
+          </ScrollArea>
+
+          <div className="fixed bottom-0 left-0 w-full p-6 bg-white/90 backdrop-blur-xl border-t border-[#F2F2F7] z-50">
+            <Button 
+              className="w-full h-[72px] text-xl font-black rounded-[24px] bg-[#1D1D1F] text-white shadow-2xl"
+              onClick={handleCreateMasterItem}
+              disabled={isProcessing}
+            >
+              {isProcessing ? "Archiving SKU..." : "LOG MASTER ARTIFACT"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ================================================================= */}
+      {/* VIEW: RECIPE SELECT (MENU TARGETS)                                */}
+      {/* ================================================================= */}
+      {view === "recipe_select" && (
+        <div className="flex flex-col h-full relative animate-in fade-in">
+          <header className="pt-12 pb-4 px-6 bg-white border-b flex justify-between items-center z-10 shadow-sm">
+            <div className="flex items-center gap-3">
+              <Button variant="ghost" className="h-11 w-11 rounded-full p-0 bg-[#F5F5F7]" onClick={() => setView("count_execution")}>
+                <ChevronLeft size={24} />
+              </Button>
+              <div className="flex flex-col">
+                <h1 className="text-xl font-black tracking-tighter text-[#1D1D1F]">Recipe Engine</h1>
+                <span className="text-[10px] font-bold text-[#86868B] uppercase tracking-[0.12em]">Select Menu Target</span>
+              </div>
+            </div>
+          </header>
+
+          <ScrollArea className="flex-1 w-full">
+            <div className="p-4 pb-[100px] space-y-4">
+              <div className="px-2">
+                <div className="relative mt-2">
+                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-[#D2D2D7]" size={18} />
+                  <Input 
+                    className="h-[56px] pl-12 rounded-2xl border-none shadow-sm bg-white font-bold" 
+                    placeholder="Search active menu items..." 
+                    onChange={(e) => setRecipeSearchTerm(e.target.value)}
+                  />
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 gap-3">
-                {(["Perishables", "Dry Goods", "Packaging"] as const).map(cat => (
-                  <button
-                    key={cat}
-                    onClick={() => { triggerHaptic(); setNewItemCategory(cat); }}
-                    className={`flex items-center justify-center p-4 rounded-xl border-2 font-bold text-lg transition-all active:scale-[0.98] ${newItemCategory === cat ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-card text-foreground'}`}
-                    style={{ minHeight: '60px' }}
+                {menuItems.filter(i => i.name.toLowerCase().includes(recipeSearchTerm.toLowerCase())).map((item) => (
+                  <Card 
+                    key={item.id} 
+                    className="border-none shadow-sm rounded-[24px] overflow-hidden bg-white active:scale-[0.98] transition-all cursor-pointer"
+                    onClick={() => selectMenuTarget(item)}
                   >
-                    {cat}
-                  </button>
+                    <CardContent className="p-6 flex justify-between items-center">
+                      <div className="flex flex-col">
+                        <h3 className="text-2xl font-black text-[#1D1D1F]">{item.name}</h3>
+                        <div className="flex gap-3 mt-1">
+                          <span className="text-[11px] font-bold text-[#86868B] uppercase">Base: {item.recipe_ingredients?.length || 0}</span>
+                          <span className="text-[11px] font-bold text-[#007AFF] uppercase">Mods: {item.modifier_groups?.length || 0}</span>
+                        </div>
+                      </div>
+                      <ChevronLeft className="rotate-180 text-[#D2D2D7]" size={24} />
+                    </CardContent>
+                  </Card>
                 ))}
               </div>
             </div>
+          </ScrollArea>
+        </div>
+      )}
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="itemUom" className="text-base font-bold text-muted-foreground uppercase tracking-wider">UOM <span className="text-destructive">*</span></Label>
-                <Input 
-                  id="itemUom" 
-                  value={newItemUom} 
-                  onChange={(e) => setNewItemUom(e.target.value)} 
-                  placeholder="e.g. Lbs, Cases" 
-                  className="min-h-[56px] text-lg bg-card"
-                />
+      {/* ================================================================= */}
+      {/* VIEW: RECIPE BUILDER (BASE & MODIFIERS)                           */}
+      {/* ================================================================= */}
+      {view === "recipe_build" && (
+        <div className="flex flex-col h-full relative animate-in slide-in-from-right duration-300">
+          <header className="pt-12 pb-4 px-6 bg-white border-b flex justify-between items-center z-10 shadow-sm">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 bg-[#1D1D1F] text-white rounded-xl flex items-center justify-center">
+                <ChefHat size={22} />
               </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="itemPar" className="text-base font-bold text-muted-foreground uppercase tracking-wider">Par Level <span className="text-destructive">*</span></Label>
-                <Input 
-                  id="itemPar" 
-                  type="number"
-                  inputMode="numeric"
-                  value={newItemPar} 
-                  onChange={(e) => setNewItemPar(e.target.value)} 
-                  placeholder="0" 
-                  className="min-h-[56px] text-lg bg-card"
-                />
+              <div className="flex flex-col">
+                <h1 className="text-xl font-black tracking-tighter text-[#1D1D1F]">Recipe Engine</h1>
+                <span className="text-[10px] font-bold text-[#86868B] uppercase tracking-[0.12em]">Production Logic</span>
               </div>
             </div>
+            <Button variant="ghost" className="h-11 w-11 rounded-full p-0 bg-[#F5F5F7]" onClick={() => setView("recipe_select")}>
+              <X size={20} />
+            </Button>
+          </header>
 
-          </div>
-        </ScrollArea>
+          <ScrollArea className="flex-1 w-full">
+            <div className="p-4 pb-[200px] space-y-4">
+              <div className="px-2 mb-6 mt-4">
+                <h2 className="text-3xl font-black text-[#1D1D1F] tracking-tighter leading-none">{selectedMenu?.name}</h2>
+                <p className="text-[#86868B] font-bold text-sm mt-2">Configure physical depletion and POS behavior.</p>
+              </div>
 
-        <div className="fixed bottom-0 left-0 w-full bg-background border-t p-4 pb-8 shadow-[0_-10px_40px_rgba(0,0,0,0.1)] z-50">
-          <Button 
-            size="lg" 
-            className="w-full min-h-[64px] text-xl font-bold bg-primary text-primary-foreground"
-            onClick={handleCreateMasterItem}
-            disabled={isProcessing}
-          >
-            {isProcessing ? "Saving..." : <><Save className="mr-2 h-6 w-6" /> Save to Master Inventory</>}
-          </Button>
-        </div>
-      </div>
-    );
-  }
+              {/* TABS (Base vs Modifiers) */}
+              <div className="flex items-center bg-[#E5E5EA] p-1.5 rounded-2xl mb-6">
+                <button 
+                  className={`flex-1 h-[48px] rounded-xl font-black text-sm uppercase tracking-wider transition-all ${recipeTab === "base" ? "bg-white text-[#1D1D1F] shadow-sm" : "text-[#86868B]"}`}
+                  onClick={() => setRecipeTab("base")}
+                >
+                  Base Recipe
+                </button>
+                <button 
+                  className={`flex-1 h-[48px] rounded-xl font-black text-sm uppercase tracking-wider transition-all ${recipeTab === "modifiers" ? "bg-white text-[#1D1D1F] shadow-sm" : "text-[#86868B]"}`}
+                  onClick={() => setRecipeTab("modifiers")}
+                >
+                  POS Modifiers
+                </button>
+              </div>
 
-  // ============================================================================
-  // RENDER: COUNT EXECUTION VIEW (Default)
-  // ============================================================================
-  return (
-    <div className="flex flex-col h-screen bg-background relative pb-[120px]">
-      
-      <div className="pt-12 pb-4 px-6 bg-card border-b flex justify-between items-center z-10">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Commissary Restock</h1>
-          <p className="text-sm text-muted-foreground">Weekly Count Execution</p>
-        </div>
-        <Button variant="outline" size="icon" className="min-h-[44px] min-w-[44px] rounded-full border-primary/20 bg-primary/5 text-primary hover:bg-primary/10" onClick={() => { triggerHaptic(); setView("create_item"); }}>
-          <Plus className="h-6 w-6" />
-        </Button>
-      </div>
-
-      {isLoading ? (
-        <div className="flex flex-col items-center justify-center flex-1 p-6 text-center">
-          <p className="text-muted-foreground">Connecting to Ledger...</p>
-        </div>
-      ) : inventory.length === 0 ? (
-        <div className="flex flex-col items-center justify-center flex-1 p-6 text-center">
-          <PackageSearch className="h-20 w-20 text-muted-foreground opacity-20 mb-6" />
-          <h2 className="text-2xl font-bold tracking-tight">Master Catalog Empty</h2>
-          <p className="text-muted-foreground mt-2 text-lg mb-8">Your inventory system is blank. You must create master items before executing a count.</p>
-          <Button size="lg" className="min-h-[60px] text-lg font-bold px-8" onClick={() => { triggerHaptic(); setView("create_item"); }}>
-            <Plus className="mr-2 h-6 w-6" /> Create First Item
-          </Button>
-        </div>
-      ) : (
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full flex-1 flex flex-col">
-          <div className="px-4 py-2 border-b bg-card z-10 sticky top-0 overflow-x-auto no-scrollbar">
-            <TabsList className="w-full min-h-[50px] inline-flex">
-              {(["Perishables", "Dry Goods", "Packaging"] as const).map(cat => (
-                <TabsTrigger key={cat} value={cat} className="min-h-[44px] text-base font-semibold px-6 flex-1">
-                  {cat}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </div>
-
-          <div className="flex-1 overflow-y-auto px-4 py-6">
-            <TabsContent value={activeTab} className="m-0 flex flex-col gap-6 focus-visible:outline-none focus-visible:ring-0">
-              
-              {activeItems.length === 0 ? (
-                <div className="text-center py-20 text-muted-foreground">
-                  <p className="text-lg">No {activeTab} items in master catalog.</p>
-                  <Button variant="link" onClick={() => setView("create_item")} className="mt-2 text-primary font-bold">
-                    + Add New Item to {activeTab}
-                  </Button>
-                </div>
-              ) : (
-                activeItems.map((item) => (
-                  <div key={item.id} className="flex flex-col gap-2">
-                    <div className="flex justify-between items-end mb-1">
-                      <Label htmlFor={item.id} className="text-lg font-bold">
-                        {item.name}
-                      </Label>
-                      <span className="text-sm text-muted-foreground font-medium">Par: {item.parLevel} {item.uom}</span>
-                    </div>
-                    
-                    {/* Contextual Numeric Keyboard via type="number" */}
-                    <Input 
-                      id={item.id}
-                      type="number"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      placeholder={`Current ${item.uom} count...`}
-                      value={item.currentCount}
-                      onChange={(e) => handleCountChange(item.id, e.target.value)}
-                      className={`min-h-[60px] text-xl font-bold bg-muted/30 border-border/60 ${item.needsReview ? 'border-destructive focus-visible:ring-destructive bg-destructive/5' : ''}`}
-                    />
-                    
-                    {item.needsReview && (
-                      <div className="flex items-center gap-2 text-destructive text-sm mt-1 font-bold">
-                        <AlertCircle className="h-4 w-4" />
-                        <span>Count exceeds 150% of Par. Please verify.</span>
+              {/* --- TAB: BASE RECIPE --- */}
+              {recipeTab === "base" && (
+                <div className="space-y-6 animate-in fade-in">
+                  <div className="space-y-3">
+                    <Label className="text-[10px] font-black text-[#86868B] uppercase tracking-widest ml-1">Included Ingredients</Label>
+                    {baseRecipe.length === 0 ? (
+                      <div className="p-8 text-center bg-white rounded-[24px] border-2 border-dashed border-[#D2D2D7]">
+                        <UtensilsCrossed size={32} className="mx-auto text-[#D2D2D7] mb-2" />
+                        <p className="text-sm font-bold text-[#86868B]">No base ingredients logged.</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {baseRecipe.map((ing) => (
+                          <div key={ing.inventory_id} className="p-4 bg-white rounded-[20px] shadow-sm flex justify-between items-center">
+                            <div className="flex flex-col">
+                              <span className="font-black text-[#1D1D1F] text-lg leading-tight">{ing.name}</span>
+                              <span className="text-[10px] font-bold text-[#86868B] uppercase">Depletion Unit: {ing.uom}</span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <Input 
+                                type="number"
+                                className="w-[72px] h-[48px] rounded-xl text-center font-black bg-[#F5F5F7] border-none text-lg"
+                                value={ing.quantity}
+                                onChange={(e) => updateBaseQty(ing.inventory_id, Number(e.target.value))}
+                              />
+                              <button onClick={() => removeBaseIngredient(ing.inventory_id)} className="h-[48px] w-[48px] flex items-center justify-center text-[#FF3B30] active:bg-red-50 rounded-full transition-colors">
+                                <Trash2 size={20} />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>
-                ))
-              )}
 
-              {activeItems.length > 0 && (
-                <div className="mt-8 border-t pt-8 pb-8">
-                  <Button variant="outline" className="w-full min-h-[60px] text-lg font-bold border-dashed border-2" onClick={() => { triggerHaptic(); setNewItemCategory(activeTab as any); setView("create_item"); }}>
-                    <Plus className="mr-2 h-5 w-5" /> Add Master Item to Category
-                  </Button>
+                  <div className="space-y-3 pt-6 border-t border-[#D2D2D7]">
+                    <Label className="text-[10px] font-black text-[#86868B] uppercase tracking-widest ml-1">Add from Inventory</Label>
+                    <div className="grid grid-cols-1 gap-2">
+                      {inventory.map((inv) => (
+                        <button key={inv.id} onClick={() => addBaseIngredient(inv)} className="h-[60px] px-6 bg-white rounded-[20px] flex justify-between items-center shadow-sm active:scale-[0.98]">
+                          <span className="font-bold text-[#1D1D1F]">{inv.name}</span>
+                          <div className="h-8 w-8 bg-[#F5F5F7] rounded-full flex items-center justify-center"><Plus size={16} className="text-[#007AFF]" /></div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               )}
 
-              {/* Toggle over Checkbox for binary decisions */}
-              {activeItems.length > 0 && (
-                <Card className="mt-4 border-border/50 bg-muted/20">
-                  <CardContent className="p-5 flex items-center justify-between">
-                    <div className="flex flex-col gap-1 pr-4">
-                      <Label className="text-base font-bold cursor-pointer" htmlFor="urgent-delivery">Urgent Delivery Required</Label>
-                      <span className="text-sm text-muted-foreground font-medium">Flag manifest for expedited central routing</span>
-                    </div>
-                    <Switch 
-                      id="urgent-delivery" 
-                      checked={requiresUrgentDelivery}
-                      onCheckedChange={(val) => { triggerHaptic(); setRequiresUrgentDelivery(val); }}
-                      className="scale-125" 
-                    />
-                  </CardContent>
-                </Card>
-              )}
-            </TabsContent>
-          </div>
-        </Tabs>
-      )}
+              {/* --- TAB: POS MODIFIERS --- */}
+              {recipeTab === "modifiers" && (
+                <div className="space-y-8 animate-in fade-in">
+                  {modGroups.map((group) => (
+                    <div key={group.id} className="p-5 bg-white rounded-[28px] shadow-sm border border-[#E5E5EA]">
+                      
+                      <div className="flex justify-between items-start mb-6">
+                        <div className="flex-1 mr-4">
+                          <Label className="text-[10px] font-black text-[#86868B] uppercase tracking-widest ml-1">Group Name</Label>
+                          <Input 
+                            value={group.name} 
+                            onChange={(e) => updateModGroup(group.id, { name: e.target.value })}
+                            className="h-[48px] font-black text-xl border-none bg-[#F5F5F7] mt-1"
+                          />
+                        </div>
+                        <button onClick={() => deleteModGroup(group.id)} className="h-[48px] w-[48px] flex items-center justify-center text-[#FF3B30] bg-[#FF3B30]/10 rounded-full shrink-0">
+                          <Trash2 size={20} />
+                        </button>
+                      </div>
 
-      {/* Sticky Footer */}
-      {inventory.length > 0 && !isLoading && (
-        <div className="fixed bottom-0 left-0 w-full bg-background border-t p-4 pb-8 shadow-[0_-10px_40px_rgba(0,0,0,0.1)] z-50">
-          <Button 
-            size="lg" 
-            className="w-full min-h-[64px] text-xl font-bold bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white active:scale-[0.98] transition-transform"
-            onClick={submitRestockManifest}
-            disabled={isProcessing}
-          >
-            {isProcessing ? "Transmitting..." : "Submit Restock Manifest"}
-          </Button>
+                      <div className="flex items-center justify-between p-4 bg-[#F5F5F7] rounded-[20px] mb-6">
+                        <div className="flex flex-col">
+                          <span className="font-bold text-[#1D1D1F]">Required Selection</span>
+                          <span className="text-[11px] text-[#86868B] font-bold leading-tight">Customer must choose an option</span>
+                        </div>
+                        <Switch checked={group.isRequired} onCheckedChange={(val) => { triggerHaptic(); updateModGroup(group.id, { isRequired: val }); }} />
+                      </div>
+
+                      <div className="space-y-3">
+                        <Label className="text-[10px] font-black text-[#86868B] uppercase tracking-widest ml-1">Options mapped to inventory</Label>
+                        {group.options.map(opt => (
+                          <div key={opt.id} className="p-4 bg-[#F5F5F7] rounded-[20px] space-y-3 border border-[#D2D2D7]">
+                            <div className="flex justify-between items-center">
+                              <span className="font-black text-[#1D1D1F] text-lg">{opt.name}</span>
+                              <button onClick={() => removeOption(group.id, opt.id)} className="text-[#FF3B30] active:scale-95"><X size={20}/></button>
+                            </div>
+                            <div className="flex gap-3">
+                              <div className="flex-1">
+                                <Label className="text-[10px] font-bold text-[#86868B] uppercase">Price Delta (+/-)</Label>
+                                <div className="relative mt-1">
+                                  <DollarSign size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#86868B]" />
+                                  <Input type="number" value={opt.priceDelta} onChange={(e) => updateOption(group.id, opt.id, { priceDelta: Number(e.target.value) })} className="h-[44px] pl-8 font-bold border-[#D2D2D7]"/>
+                                </div>
+                              </div>
+                              <div className="flex-1">
+                                <Label className="text-[10px] font-bold text-[#86868B] uppercase">Deplete Qty ({opt.uom})</Label>
+                                <Input type="number" value={opt.quantity} onChange={(e) => updateOption(group.id, opt.id, { quantity: Number(e.target.value) })} className="h-[44px] font-bold border-[#D2D2D7] mt-1"/>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+
+                        <select 
+                          className="w-full h-[56px] rounded-[20px] bg-white border-2 border-[#007AFF] text-[#007AFF] font-black text-center appearance-none mt-2"
+                          onChange={(e) => {
+                            const invItem = inventory.find(i => i.id === e.target.value);
+                            if (invItem) addOptionToGroup(group.id, invItem);
+                            e.target.value = ""; // reset
+                          }}
+                          value=""
+                        >
+                          <option value="" disabled>+ ADD MODIFIER FROM INVENTORY</option>
+                          {inventory.map(inv => (
+                            <option key={inv.id} value={inv.id}>{inv.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  ))}
+
+                  <Button variant="outline" className="w-full h-[64px] rounded-[24px] border-dashed border-2 border-[#D2D2D7] text-[#1D1D1F] font-black text-lg active:scale-[0.98]" onClick={addModifierGroup}>
+                    <Layers className="mr-2" size={20} /> CREATE NEW MODIFIER GROUP
+                  </Button>
+
+                </div>
+              )}
+            </div>
+          </ScrollArea>
+
+          {/* Builder Footer */}
+          <div className="fixed bottom-0 left-0 w-full p-6 bg-white/90 backdrop-blur-xl border-t border-[#F2F2F7] z-20 animate-in slide-in-from-bottom">
+            <Button 
+              disabled={isProcessing}
+              className="w-full h-[72px] text-xl font-black rounded-[24px] bg-[#1D1D1F] text-white shadow-2xl active:scale-[0.98] transition-transform"
+              onClick={commitRecipeToLedger}
+            >
+              {isProcessing ? "Transmuting..." : "VAULT FULL RECIPE LOGIC"}
+            </Button>
+          </div>
         </div>
       )}
 
