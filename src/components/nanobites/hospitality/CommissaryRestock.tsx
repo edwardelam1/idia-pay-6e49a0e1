@@ -1358,10 +1358,12 @@ function AuditVariance({
 function AdjustStock({
   items,
   businessId,
+  locationId,
   onComplete,
 }: {
   items: InventoryItem[];
   businessId: string;
+  locationId: string | null;
   onComplete: () => void;
 }) {
   const [target, setTarget] = useState<InventoryItem | null>(null);
@@ -1380,6 +1382,10 @@ function AdjustStock({
 
   const commit = async () => {
     if (!target) return;
+    if (!locationId) {
+      toast.error("No active business location found.");
+      return;
+    }
     const delta = Number(qty);
     if (Number.isNaN(delta) || delta === 0) {
       toast.error("Enter a non-zero offset.");
@@ -1395,6 +1401,8 @@ function AdjustStock({
         .from("inventory_adjustments")
         .insert({
           business_id: businessId,
+          location_id: locationId,
+          adjustment_number: makeAdjustmentNumber("ADJ"),
           inventory_item_id: target.id,
           adjustment_type: "manual_override",
           adjustment_quantity: Math.round(delta),
