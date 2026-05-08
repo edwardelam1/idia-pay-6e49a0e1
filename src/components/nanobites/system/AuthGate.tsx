@@ -79,8 +79,8 @@ function AuthGateCore() {
       <Card className="w-full max-w-md rounded-3xl shadow-2xl border-none">
         <CardContent className="p-8 space-y-8">
           <div className="text-center space-y-2">
-            <div className="w-16 h-16 mx-auto rounded-2xl bg-primary/10 flex items-center justify-center">
-              <ShieldCheck className="w-8 h-8 text-primary" />
+            <div className="w-20 h-20 mx-auto rounded-2xl overflow-hidden shadow-lg bg-background">
+              <img src={payLogo} alt="IDIA Pay" className="w-full h-full object-cover" />
             </div>
             <h1 className="text-3xl font-black text-foreground">IDIA Pay</h1>
             <p className="text-sm text-muted-foreground">Terminal Access Matrix</p>
