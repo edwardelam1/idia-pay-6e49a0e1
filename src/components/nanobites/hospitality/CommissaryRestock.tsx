@@ -93,15 +93,16 @@ function haptic(kind: "light" | "heavy" = "light") {
   try {
     if (typeof window !== "undefined" && window.navigator?.vibrate) {
       window.navigator.vibrate(kind === "heavy" ? [40, 30, 40] : 25);
+    }
+  } catch (e) {
+    PicoLog("Haptic", "ERROR", (e as Error).message);
+  }
 }
 
 function makeAdjustmentNumber(prefix: string) {
   const ts = Date.now().toString(36).toUpperCase();
   const rnd = Math.random().toString(36).slice(2, 6).toUpperCase();
   return `${prefix}-${ts}-${rnd}`;
-  } catch (e) {
-    PicoLog("Haptic", "ERROR", (e as Error).message);
-  }
 }
 
 // ============================================================================
