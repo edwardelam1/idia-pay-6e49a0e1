@@ -186,6 +186,7 @@ export default function CommissaryRestockFactory({
   const [isExploded, setIsExploded] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [locationId, setLocationId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [intakePhase, setIntakePhase] = useState<1 | 2 | 3>(1);
   const [formData, setFormData] = useState<IntakeForm>(EMPTY_FORM);
