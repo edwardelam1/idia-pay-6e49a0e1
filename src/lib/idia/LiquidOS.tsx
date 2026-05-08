@@ -15,6 +15,7 @@ import {
 } from "@/lib/idia/executions";
 
 import SovereignWrapper from "@/components/sovereign/SovereignWrapper";
+import { ActiveBusinessProvider } from "@/lib/idia/ActiveBusinessContext";
 
 /**
  * THE LIQUID ATOM REGISTRY
