@@ -9,7 +9,8 @@ import {
 } from "@tanstack/react-router";
 
 import appCss from "../styles.css?url";
-import { LiquidOSErrorBoundary, injectResizeObserverShield, logPlanck } from "@/lib/error-capture";
+import { injectResizeObserverShield, logPlanck } from "@/lib/error-capture";
+import { LiquidOSErrorBoundary } from "@/lib/error-boundary";
 
 if (typeof window !== "undefined") {
   injectResizeObserverShield();
