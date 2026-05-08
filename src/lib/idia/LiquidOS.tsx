@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useContext, useEffect, useState, type ReactNode } from "react";
 import idiaLogo from "@/assets/idia-logo.png";
 import payLogo from "@/assets/idia-pay-logo.jpg";
 import {
@@ -15,8 +15,10 @@ import {
 } from "@/lib/idia/executions";
 
 import SovereignWrapper from "@/components/sovereign/SovereignWrapper";
-import { ActiveBusinessProvider } from "@/lib/idia/ActiveBusinessContext";
-import { TenancyProvider } from "@/providers/TenancyProvider";
+import {
+  ActiveBusinessContext,
+  ActiveBusinessProvider,
+} from "@/lib/idia/ActiveBusinessContext";
 
 /**
  * THE LIQUID ATOM REGISTRY
