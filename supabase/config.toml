@@ -1,1 +1,7 @@
 project_id = "zxyngqciipcvveigrzqt"
+
+[functions.flexa-payment-processing]
+verify_jwt = true
+
+[functions.fiat-payment-processing]
+verify_jwt = true
