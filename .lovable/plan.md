@@ -1,82 +1,82 @@
 ## Goal
 
-Re-sequence the boot so **Device Identity (Hub Provisioning Code) runs first**, then **Human Identity (Email OTP)** is gated against the specific business the device just provisioned. Also ensure the auth email delivers a 6-digit code (not a magic link).
+Make `TenancyProvider` the single root gatekeeper that owns BOTH device binding (TerminalProvisionGate) and human binding (AuthGate). `LiquidOS` becomes a pure consumer that reads `provisioningCode` from `ActiveBusinessContext`, hydrates the carton, and renders Nano-Bites.
 
----
+## Changes
 
-## 1. Remove TenancyProvider from the root
+### 1. `src/components/nanobites/system/TerminalProvisionGate.tsx`
+In `handleProvision`, after a successful business lookup, also persist the typed code:
+```ts
+HardwareStorage.setItem('idia_provisioned_business_id', targetBusiness.id);
+HardwareStorage.setItem('idia_provisioned_business_name', targetBusiness.name);
+HardwareStorage.setItem('idia_provisioned_code', sanitizedCode);  // NEW
+```
+(All other logic — native bridge, multi-code + legacy fallback query, error handling — stays as previously specified.)
 
-**File:** `src/routes/__root.tsx`
-
-- Delete the `import { TenancyProvider } from "@/providers/TenancyProvider"` line.
-- Unwrap `<TenancyProvider>` from around `<Outlet />` in `RootComponent` so the root only renders `QueryClientProvider → LiquidOSErrorBoundary → Outlet`.
-
-Result: visiting any route boots straight into LiquidOS with no auth prompt.
-
----
-
-## 2. Rewrite `src/providers/TenancyProvider.tsx`
-
-Adopt the user-supplied contract:
-
-- New props: `provisionedBusinessId: string`, `onUnprovisionDevice: () => void`, `children`.
-- Resolution query becomes strictly scoped:
+### 2. `src/providers/TenancyProvider.tsx`
+- In the boot `useEffect`, also read `idia_provisioned_code`. Treat the device as unprovisioned if either value is missing:
+  ```ts
+  const storedBusinessId = HardwareStorage.getItem('idia_provisioned_business_id');
+  const storedCode = HardwareStorage.getItem('idia_provisioned_code');
+  if (!storedBusinessId || !storedCode) { setStatus('unprovisioned'); return; }
   ```
-  business_users
-    .eq("user_id", session.user.id)
-    .eq("business_id", provisionedBusinessId)   // STRICT
-    .eq("is_active", true)
+- In the `<TerminalProvisionGate onProvisioned=...>` branch, after provisioning succeeds, set BOTH `provisionedBusinessId` and trigger a re-read so the code is in scope.
+- In the authenticated `<ActiveBusinessContext.Provider>` value, expose:
+  ```ts
+  provisioningCode: HardwareStorage.getItem('idia_provisioned_code'),
   ```
-- Add the `RotateCcw` icon and an "Unbind Device" button on the `rejected` screen that calls `onUnprovisionDevice` (in addition to the existing Sign Out).
-- Re-run resolution when `provisionedBusinessId` changes (effect dep).
-- Restore the typed state (`useState<AuthStatus>("booting")`, `useState<ResolvedTenancy | null>(null)`) and the proper JSX that the user's pasted snippet had stripped — the existing TSX layout (Loader2 booting screen, AuthGate, rejected screen, ActiveBusinessContext.Provider passing `businessId/role/pii/logout/provisioningCode`) is kept verbatim, only the query and the rejected-screen action row change.
+- `handleUnprovisionDevice` already removes business id/name; also remove `idia_provisioned_code`.
 
----
+### 3. `src/lib/idia/LiquidOS.tsx` (rewrite)
+Delete the entire Phase 1 (provisioning code text input) and the `reset`/`tenantId` props/wrappers. New responsibilities only:
+- `const { provisioningCode, logout } = useContext(ActiveBusinessContext)`
+- `useEffect` on `provisioningCode` → call `executeHydration(provisioningCode)` which calls `fetchProvisioningBlueprint`
+- Phases reduce to: `loading | error | selection | operational`
+- Selection view: list `carton.subModules`; "End Session" button calls `logout()` (no more `reset`)
+- Operational view: sidebar with screens + Nano-Bite renderer; "End Session" → `logout()`; "Module Library" → back to selection
+- Remove imports of `TenancyProvider` and `ActiveBusinessProvider` from this file (TenancyProvider now lives at root and is the sole writer of context)
+- Keep verbatim: `NanoBiteRenderer`, `DynamicNanoBite`, `BrandMark`, `uniqueScreens`, `isPaymentSpec`, `prettyTitle`, `ATOM_FILE_MAP`, `rawAtoms`, `SovereignWrapper` usage, `recordExecution`/`subscribeExecutions` flow, gesture handlers, sidebar state
 
-## 3. Rewrite `src/lib/idia/LiquidOS.tsx`
+### 4. `src/routes/__root.tsx`
+Re-introduce the root-level wrap:
+```tsx
+import { TenancyProvider } from "@/providers/TenancyProvider";
+...
+<QueryClientProvider client={queryClient}>
+  <LiquidOSErrorBoundary>
+    <TenancyProvider>
+      <Outlet />
+    </TenancyProvider>
+  </LiquidOSErrorBoundary>
+</QueryClientProvider>
+```
+`TenancyProvider` takes no props in this final form (it owns provisioning internally).
 
-- Import `TenancyProvider` from `@/providers/TenancyProvider`.
-- Keep Phase 1 (`provisioning`) **outside** any auth wrapper — the hub code form stays publicly accessible.
-- Compute `tenantId = (phase.carton.raw as any)?.business_id` once Phase 1 completes.
-- Wrap **Phase 2 (`selection`) and Phase 3 (`operational`)** inside:
-  ```tsx
-  <TenancyProvider
-    provisionedBusinessId={tenantId}
-    onUnprovisionDevice={reset}
-  >
-    {/* selection / operational JSX */}
-  </TenancyProvider>
-  ```
-- `NanoBiteRenderer` keeps `ActiveBusinessProvider` as a nested pass-through (TenancyProvider is the authoritative writer; ActiveBusinessProvider just forwards `businessId` + `provisioningCode` to the existing Nano-Bite contract).
-- Preserve all existing JSX, gesture handlers, sidebar state, `DynamicNanoBite`, `BrandMark`, `uniqueScreens`, `prettyTitle`, `isPaymentSpec`, and `recordExecution` flow — only the wrapper around Phases 2/3 changes.
+### 5. `src/components/nanobites/system/AuthGate.tsx`
+Already accepts optional `onUnprovisionDevice` prop and renders the "Detach Hardware From Fleet" button when present. `TenancyProvider` passes `handleUnprovisionDevice` into it on the `unauthenticated` branch. No further changes.
 
----
+## Boot flow (final)
 
-## 4. Magic-link → 6-digit code
+```
+__root.tsx
+  └── TenancyProvider  (owns: hardware bind + human auth + clearance)
+        ├── status=unprovisioned → <TerminalProvisionGate />
+        ├── status=unauthenticated → <AuthGate onUnprovisionDevice={...} />
+        ├── status=rejected → Terminal Locked + Sign Out / Detach
+        └── status=authenticated → <ActiveBusinessContext.Provider value={{ businessId, provisioningCode, role, pii, logout }}>
+              └── <Outlet />
+                    └── routes/index.tsx → <LiquidOS />
+                          ├── reads provisioningCode from context
+                          ├── fetchProvisioningBlueprint(code)
+                          ├── selection view (sub-modules)
+                          └── operational view (Nano-Bites)
+```
 
-Client code is already correct: `AuthGate.tsx` calls `signInWithOtp({ email })` and verifies with `verifyOtp({ type: "email", token })`. Supabase decides link-vs-code purely from the **Magic Link email template** in the dashboard.
+## Out of scope (no changes)
+- No DB migrations. Multi-code (`provisioning_codes`) query already attempts the array column with graceful fallback to legacy `provisioning_code`.
+- No edge function changes.
+- Supabase email template (`{{ .Token }}` vs `{{ .ConfirmationURL }}`) is still a dashboard-only fix on the user's side.
 
-Required (one-time, dashboard, not code):
-- Open **Supabase → Authentication → Email Templates → Magic Link**.
-- Replace the body's `{{ .ConfirmationURL }}` with `{{ .Token }}` so the email contains the 6-digit code instead of a clickable link.
-- Save.
-
-No code changes needed for this step — the existing AuthGate already consumes the token. Since you confirmed the IDIA Life infrastructure already has the OTP template, this step may already be done; if codes still aren't arriving after the template swap, we'll inspect Supabase Auth logs.
-
----
-
-## Technical notes
-
-- `provisioningCode` continues to flow through `ActiveBusinessContext` from the `ActiveBusinessProvider` inside `NanoBiteRenderer`, so existing Nano-Bites that read `useActiveBusinessId()` keep working unchanged.
-- `handleLogout` stays a module-level helper calling `supabase.auth.signOut()`; on sign-out, `onAuthStateChange` flips status to `unauthenticated` → AuthGate re-mounts inside the same provisioned tenancy.
-- `onUnprovisionDevice` (= `LiquidOS.reset`) clears `localStorage[idia_terminal_provision_code]` and returns the shell to Phase 1, fully unbinding the device.
-- No DB migrations, no edge function changes, no new packages.
-
----
-
-## Files touched
-
-1. `src/routes/__root.tsx` — remove TenancyProvider wrap.
-2. `src/providers/TenancyProvider.tsx` — new strict-business-scoped contract + Unbind action.
-3. `src/lib/idia/LiquidOS.tsx` — wrap Phases 2/3 in TenancyProvider, pass `tenantId` and `reset`.
-4. (Dashboard, not a file) Supabase Magic Link template → use `{{ .Token }}`.
+## Risks / notes
+- Existing devices with stale `localStorage` (business id but no code) will be forced back through `TerminalProvisionGate` on next boot — this is intentional and acceptable.
+- `LiquidOS` no longer renders any auth/provisioning UI; if a future route is added outside `TenancyProvider`'s wrap, it will crash on `useContext` returning the default null context. Keep the root wrap intact.
