@@ -933,10 +933,12 @@ function IntakeFactory({
 function ReceivePO({
   items,
   businessId,
+  locationId,
   onComplete,
 }: {
   items: InventoryItem[];
   businessId: string;
+  locationId: string | null;
   onComplete: () => void;
 }) {
   const [updates, setUpdates] = useState<Record<string, number>>({});
@@ -956,6 +958,10 @@ function ReceivePO({
 
   const commit = async () => {
     PicoLog("ReceivePO_Commit", "BEGIN");
+    if (!locationId) {
+      toast.error("No active business location found.");
+      return;
+    }
     const entries = Object.entries(updates).filter(([, q]) => q && q !== 0);
     if (entries.length === 0) {
       toast.error("Nothing to receive.");
@@ -973,6 +979,8 @@ function ReceivePO({
           .from("inventory_adjustments")
           .insert({
             business_id: businessId,
+            location_id: locationId,
+            adjustment_number: makeAdjustmentNumber("PO"),
             inventory_item_id: itemId,
             adjustment_type: "restock",
             adjustment_quantity: Math.round(Number(qty)),
