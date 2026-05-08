@@ -1,225 +1,287 @@
-/** * NANO-BITE ID: hosp.ft.ops.service
- * NANO-BITE NAME: Service-location schedule
- * ROLE: Daily
- * INDUSTRY: tertiary.hospitality.food_truck 
+/*  NANO-BITE ID: hosp.ft.ops.service
+ *  NANO-BITE NAME: Service-location schedule
+ *  ROLE: Daily
+ *  INDUSTRY: tertiary.hospitality.food_truck
  */
 
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { MapPin, Navigation, Clock, CheckCircle, PowerOff } from "lucide-react";
+import { MapPin, Navigation, Clock, CheckCircle, PowerOff, Loader2 } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { toast } from "sonner";
 
-export default function ServiceLocation({ businessId = "default" }: { businessId?: string }) {
-  // --- STATE MACHINE ---
-  type ViewStep = "loading" | "entry" | "active";
+import { LiquidOSErrorBoundary } from "@/lib/error-boundary";
+import { logPlanck } from "@/lib/error-capture";
+import { useActiveBusinessId } from "@/lib/idia/ActiveBusinessContext";
+
+type ViewStep = "loading" | "entry" | "active";
+
+function ServiceLocationCore() {
+  const businessId = useActiveBusinessId();
+
+  if (!businessId) {
+    logPlanck("STALL", "TENANT_CONTEXT_NULL", "Nano-Bite mounted without authoritative tenant ID.");
+    throw new Error(
+      "CRITICAL STALL: Tenant Context Null. Nano-Bite cannot execute without an authoritative business ID."
+    );
+  }
+
   const [step, setStep] = useState<ViewStep>("loading");
-  
-  // Data State
   const [address, setAddress] = useState("");
   const [activeLocationId, setActiveLocationId] = useState<string | null>(null);
   const [activeSince, setActiveSince] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  const triggerHaptic = useCallback((type: 'light' | 'heavy' = 'light') => {
+  const [isFlip3D, setIsFlip3D] = useState(false);
+  const [editModeId, setEditModeId] = useState<string | null>(null);
+
+  const touchStartX = useRef(0);
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const triggerHaptic = useCallback((type: "light" | "heavy" = "light") => {
     try {
-      if (typeof window !== 'undefined' && window.navigator && window.navigator.vibrate) {
-        window.navigator.vibrate(type === 'heavy' ? [50, 50, 50] : 50);
+      if (typeof window !== "undefined" && window.navigator?.vibrate) {
+        window.navigator.vibrate(type === "heavy" ? [50, 50, 50] : 50);
       }
-    } catch (e) { /* Hardware agnostic fallback */ }
+    } catch (e) {
+      logPlanck("STALL", "HAPTIC_ENGINE", "Hardware agnostic fallback triggered", e);
+    }
   }, []);
 
-  // ============================================================================
-  // SUPABASE: FETCH CURRENT STATUS
-  // ============================================================================
   const fetchActiveLocation = useCallback(async () => {
-    console.log(`[BEGIN] fetchActiveLocation execution`);
+    logPlanck("START", "DISCOVERY_ENGINE", `Resonating Active Location for business_id: ${businessId}`);
     try {
       const { data, error } = await supabase
-        .from('business_locations')
-        .select('id, address, created_at')
-        .eq('business_id', businessId)
-        .eq('is_active', true)
-        .order('created_at', { ascending: false })
+        .from("business_locations")
+        .select("id, address, created_at")
+        .eq("business_id", businessId)
+        .eq("is_active", true)
+        .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
 
       if (error) throw error;
 
       if (data) {
-        console.log(`[INFO] fetchActiveLocation: Found active location ${data.id}`);
+        logPlanck("END", "DISCOVERY_SUCCESS", `Found active location artifact: ${data.id}`);
         setAddress(data.address);
         setActiveLocationId(data.id);
         setActiveSince(data.created_at);
         setStep("active");
       } else {
-        console.log(`[INFO] fetchActiveLocation: No active location found. Routing to entry.`);
+        logPlanck("END", "DISCOVERY_EMPTY", "No active location found. Routing to entry matrix.");
         setStep("entry");
       }
-    } catch (err: any) {
-      console.error(`[ERROR] fetchActiveLocation failed:`, err.message);
-      setStep("entry"); // Fallback to entry if fetch fails
-    } finally {
-      console.log(`[END] fetchActiveLocation execution`);
+    } catch (err) {
+      logPlanck("STALL", "DISCOVERY_ENGINE", "Location registry unreachable.", err);
+      toast.error("Discovery Failed: Location registry unreachable.");
+      setStep("entry");
     }
   }, [businessId]);
 
   useEffect(() => {
-    if (businessId !== "default") {
-      fetchActiveLocation();
-    } else {
-      setStep("entry");
-    }
-  }, [businessId, fetchActiveLocation]);
+    fetchActiveLocation();
+  }, [fetchActiveLocation]);
 
-  // ============================================================================
-  // SUPABASE: CHECK-IN TO NEW LOCATION
-  // ============================================================================
   const handleCheckIn = async () => {
-    console.log(`[BEGIN] handleCheckIn execution for address: ${address}`);
-    if (!address.trim()) return;
-    
+    logPlanck("START", "TRANSACTION_COMMIT", `Executing Check-In for address: ${address}`);
+    if (!address.trim()) {
+      logPlanck("STALL", "VALIDATION_FAIL", "Missing mandatory address field.");
+      toast.error("Address required.");
+      return;
+    }
+
     setIsProcessing(true);
-    triggerHaptic('heavy');
+    triggerHaptic("heavy");
 
     try {
-      // 1. Deactivate any currently active locations for this business
-      console.log(`[INFO] handleCheckIn: Deactivating previous location artifacts.`);
       const { error: deactivateError } = await supabase
-        .from('business_locations')
+        .from("business_locations")
         .update({ is_active: false })
-        .eq('business_id', businessId)
-        .eq('is_active', true);
+        .eq("business_id", businessId)
+        .eq("is_active", true);
 
       if (deactivateError) throw deactivateError;
 
-      // 2. Insert the new active location
-      console.log(`[INFO] handleCheckIn: Writing new location to ledger.`);
-      const newTimestamp = new Date().toISOString();
       const { data: newLoc, error: insertError } = await supabase
-        .from('business_locations')
+        .from("business_locations")
         .insert({
           business_id: businessId,
           name: `Mobile Service - ${new Date().toLocaleDateString()}`,
           address: address.trim(),
           is_active: true,
-          facility_type: 'location',
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+          facility_type: "location",
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         })
-        .select('id')
+        .select("id, created_at")
         .single();
 
       if (insertError) throw insertError;
 
-      console.log(`[INFO] handleCheckIn: Check-in successful. ID: ${newLoc.id}`);
+      logPlanck("END", "TRANSACTION_SUCCESS", `Check-in successful. ID: ${newLoc.id}`);
       setActiveLocationId(newLoc.id);
-      setActiveSince(newTimestamp);
+      setActiveSince(newLoc.created_at);
       setStep("active");
-
-    } catch (error: any) {
-      console.error(`[ERROR] handleCheckIn failed:`, error.message);
-      alert("System Error: Could not broadcast location. Please check connectivity.");
+      toast.success("Coordinates Secured & Broadcasted.");
+    } catch (error) {
+      logPlanck("STALL", "TRANSACTION_COMMIT", "Check-In failed.", error);
+      toast.error("System Error: Could not broadcast location.");
     } finally {
       setIsProcessing(false);
-      console.log(`[END] handleCheckIn execution`);
     }
   };
 
-  // ============================================================================
-  // SUPABASE: END SERVICE
-  // ============================================================================
   const handleEndService = async () => {
-    console.log(`[BEGIN] handleEndService execution for location: ${activeLocationId}`);
     if (!activeLocationId) return;
+    logPlanck("START", "TRANSACTION_COMMIT", `Executing End Service for location: ${activeLocationId}`);
 
     setIsProcessing(true);
-    triggerHaptic('heavy');
+    triggerHaptic("heavy");
 
     try {
       const { error } = await supabase
-        .from('business_locations')
+        .from("business_locations")
         .update({ is_active: false })
-        .eq('id', activeLocationId);
+        .eq("id", activeLocationId);
 
       if (error) throw error;
 
-      console.log(`[INFO] handleEndService: Location deactivated successfully.`);
+      logPlanck("END", "TRANSACTION_SUCCESS", "Location deactivated successfully.");
       setAddress("");
       setActiveLocationId(null);
       setActiveSince(null);
+      setEditModeId(null);
       setStep("entry");
-
-    } catch (error: any) {
-      console.error(`[ERROR] handleEndService failed:`, error.message);
-      alert("System Error: Could not end service.");
+      toast.info("Service Ended & Disconnected.");
+    } catch (error) {
+      logPlanck("STALL", "TRANSACTION_COMMIT", "End Service failed.", error);
+      toast.error("System Error: Could not end service.");
     } finally {
       setIsProcessing(false);
-      console.log(`[END] handleEndService execution`);
     }
   };
 
-  // ============================================================================
-  // RENDER BLOCKS
-  // ============================================================================
+  const handleGlobalTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+  };
+
+  const handleGlobalTouchEnd = (e: React.TouchEvent) => {
+    const touchEndX = e.changedTouches[0].clientX;
+    const diff = touchStartX.current - touchEndX;
+    if (Math.abs(diff) > 100) {
+      logPlanck("TRIGGER", "FLIP_3D_METAPHOR", `Horizontal vector (${diff}px) exceeded threshold.`);
+      setIsFlip3D((prev) => !prev);
+      triggerHaptic("heavy");
+    }
+  };
+
+  const handleItemPointerDown = (id: string) => {
+    holdTimer.current = setTimeout(() => {
+      logPlanck("TRIGGER", "WIGGLE_MODE", `3-second hold elapsed. Activating Edit/Wiggle mode for ID: ${id}`);
+      setEditModeId(id);
+      triggerHaptic("heavy");
+    }, 3000);
+  };
+
+  const clearHoldTimer = () => {
+    if (holdTimer.current) {
+      clearTimeout(holdTimer.current);
+      holdTimer.current = null;
+    }
+  };
+
   if (step === "loading") {
     return (
-      <div className="flex flex-col items-center justify-center h-[70vh] p-6">
-        <div className="animate-pulse flex flex-col items-center">
-          <MapPin className="h-12 w-12 text-muted-foreground opacity-20 mb-4" />
-          <p className="text-muted-foreground font-bold tracking-widest uppercase">Querying Ledger...</p>
-        </div>
+      <div className="flex items-center justify-center h-full p-8">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        <p className="ml-3 text-muted-foreground">Querying Ledger...</p>
       </div>
     );
   }
 
+  const flipStyle: React.CSSProperties = isFlip3D
+    ? { transform: "perspective(1200px) rotateX(190deg)", transformOrigin: "top center", transition: "transform 0.6s ease" }
+    : { transform: "perspective(1200px) rotateX(0deg)", transition: "transform 0.6s ease" };
+
   if (step === "active") {
     return (
-      <div className="flex flex-col h-screen bg-background relative pb-[120px] animate-in fade-in zoom-in-95">
-        <div className="pt-12 pb-4 px-6 bg-card border-b z-10">
-          <h1 className="text-3xl font-black tracking-tight">Active Operations</h1>
-          <p className="text-lg text-emerald-600 font-bold flex items-center gap-2 mt-1">
+      <div
+        className="flex flex-col h-full p-4 gap-4 select-none"
+        onTouchStart={handleGlobalTouchStart}
+        onTouchEnd={handleGlobalTouchEnd}
+      >
+        <style>{`
+          @keyframes wiggle {
+            0% { transform: rotate(0deg); }
+            25% { transform: rotate(-2deg) scale(1.02); }
+            50% { transform: rotate(0deg); }
+            75% { transform: rotate(2deg) scale(1.02); }
+            100% { transform: rotate(0deg); }
+          }
+          .animate-wiggle { animation: wiggle 0.3s infinite; cursor: grab; z-index: 50; }
+        `}</style>
+
+        <header>
+          <h1 className="text-3xl font-black text-foreground">Active Operations</h1>
+          <div className="flex items-center gap-2 mt-1">
             <span className="relative flex h-3 w-3">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500" />
             </span>
-            Broadcasting to IDIA Hub
-          </p>
-        </div>
+            <span className="text-sm text-muted-foreground">Broadcasting to IDIA Hub</span>
+          </div>
+        </header>
 
-        <div className="flex-1 p-6">
-          <Card className="border-2 border-emerald-500/20 bg-emerald-50/30 shadow-lg rounded-3xl overflow-hidden">
-            <CardContent className="p-8 flex flex-col items-center text-center gap-6">
-              <div className="h-24 w-24 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center shadow-inner">
-                <MapPin className="h-12 w-12" />
+        <div style={flipStyle}>
+          <Card
+            className={`rounded-3xl shadow-lg ${editModeId === activeLocationId ? "animate-wiggle" : ""}`}
+            onPointerDown={() => activeLocationId && handleItemPointerDown(activeLocationId)}
+            onPointerUp={clearHoldTimer}
+            onPointerCancel={clearHoldTimer}
+            onPointerLeave={clearHoldTimer}
+          >
+            <CardContent className="p-6 flex gap-4">
+              <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center shrink-0">
+                <MapPin className="w-7 h-7 text-primary" />
               </div>
-              
-              <div>
-                <Label className="text-sm font-bold text-muted-foreground uppercase tracking-widest block mb-2">Current Service Spot</Label>
-                <h2 className="text-3xl font-black leading-tight text-foreground">{address}</h2>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs uppercase tracking-wide text-muted-foreground">Current Service Spot</p>
+                <p className="text-lg font-bold text-foreground break-words">{address}</p>
+                <div className="flex items-center gap-2 mt-2 text-sm text-muted-foreground">
+                  <Clock className="w-4 h-4" />
+                  <span>
+                    Online since{" "}
+                    {activeSince
+                      ? new Date(activeSince).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                      : "..."}
+                  </span>
+                </div>
               </div>
-
-              <div className="flex items-center gap-2 text-muted-foreground bg-background px-4 py-2 rounded-full border shadow-sm mt-4">
-                <Clock className="h-5 w-5" />
-                <span className="font-bold">
-                  Online since {activeSince ? new Date(activeSince).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '...'}
-                </span>
-              </div>
+              <CheckCircle className="w-6 h-6 text-emerald-500 shrink-0" />
             </CardContent>
           </Card>
         </div>
 
-        {/* Bottom Action Bar */}
-        <div className="fixed bottom-0 left-0 w-full bg-background border-t p-6 shadow-[0_-10px_40px_rgba(0,0,0,0.1)] z-50">
-          <Button 
+        <div className="mt-auto pt-4">
+          <Button
             variant="outline"
-            size="lg" 
-            onClick={handleEndService}
+            onClick={() => {
+              logPlanck("TRIGGER", "ACTION", "User initiated End Service");
+              handleEndService();
+            }}
             disabled={isProcessing}
-            className="w-full min-h-[72px] text-2xl font-black border-2 border-destructive/20 text-destructive hover:bg-destructive hover:text-destructive-foreground active:scale-[0.98] transition-all rounded-2xl"
+            className="w-full min-h-[72px] text-2xl font-black border-2 border-destructive/20 text-destructive hover:bg-destructive hover:text-destructive-foreground active:scale-[0.98] transition-all rounded-3xl"
           >
-            {isProcessing ? "Updating Ledger..." : <><PowerOff className="mr-3 h-7 w-7" /> End Service & Disconnect</>}
+            {isProcessing ? (
+              "Updating Ledger..."
+            ) : (
+              <>
+                <PowerOff className="w-6 h-6 mr-2" /> End Service & Disconnect
+              </>
+            )}
           </Button>
         </div>
       </div>
@@ -227,37 +289,66 @@ export default function ServiceLocation({ businessId = "default" }: { businessId
   }
 
   return (
-    <div className="flex flex-col h-screen bg-background relative pb-[120px] animate-in slide-in-from-bottom-4">
-      <div className="pt-12 pb-4 px-6 bg-card border-b z-10">
-        <h1 className="text-3xl font-black tracking-tight">Location Setup</h1>
-        <p className="text-lg text-muted-foreground font-medium mt-1">Establish your daily coordinates.</p>
-      </div>
-      
-      <div className="flex-1 p-6 space-y-8">
-        <div className="space-y-4">
-          <Label className="text-base font-bold text-muted-foreground uppercase tracking-wider ml-1">Current Service Spot <span className="text-destructive">*</span></Label>
+    <div
+      className="flex flex-col h-full p-4 gap-6 select-none"
+      onTouchStart={handleGlobalTouchStart}
+      onTouchEnd={handleGlobalTouchEnd}
+    >
+      <header>
+        <h1 className="text-3xl font-black text-foreground">Location Setup</h1>
+        <p className="text-muted-foreground">Establish your daily coordinates.</p>
+      </header>
+
+      <div className="flex-1">
+        <div className="space-y-2">
+          <Label htmlFor="svc-address" className="text-base font-semibold">
+            Current Service Spot *
+          </Label>
           <div className="relative">
-            <MapPin className="absolute left-5 top-1/2 -translate-y-1/2 h-7 w-7 text-primary" />
-            <Input 
-              placeholder="e.g. 5th & Broadway"
+            <Navigation className="absolute left-5 top-1/2 -translate-y-1/2 w-6 h-6 text-muted-foreground" />
+            <Input
+              id="svc-address"
+              type="text"
+              inputMode="text"
+              autoComplete="street-address"
+              placeholder="123 Main St, City, ST"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
-              className="h-[80px] pl-16 rounded-2xl bg-muted/30 border-2 border-border text-2xl font-bold shadow-inner placeholder:text-muted-foreground/50 focus-visible:ring-primary focus-visible:border-primary"
+              className="h-[80px] min-h-[44px] pl-16 rounded-2xl bg-card border-none text-2xl font-black shadow-sm placeholder:text-muted-foreground/50 focus-visible:ring-primary"
             />
           </div>
-          <p className="text-sm text-muted-foreground font-medium ml-2">This address will be broadcasted to the consumer app.</p>
+          <p className="text-xs text-muted-foreground">
+            This address will be broadcasted to the consumer app.
+          </p>
         </div>
       </div>
-      
-      <div className="fixed bottom-0 left-0 w-full bg-background border-t p-6 shadow-[0_-10px_40px_rgba(0,0,0,0.1)] z-50">
-        <Button 
-          onClick={handleCheckIn}
+
+      <div className="mt-auto">
+        <Button
+          onClick={() => {
+            logPlanck("TRIGGER", "ACTION", "User initiated Check-In");
+            handleCheckIn();
+          }}
           disabled={!address.trim() || isProcessing}
-          className="w-full min-h-[80px] bg-primary text-primary-foreground text-2xl font-black rounded-2xl shadow-xl active:scale-[0.98] transition-transform disabled:opacity-50"
+          className="w-full min-h-[80px] bg-primary text-primary-foreground text-2xl font-black rounded-[32px] shadow-2xl active:scale-[0.98] transition-transform disabled:opacity-50"
         >
-          {isProcessing ? "Securing Coordinates..." : <><Navigation className="mr-3 h-7 w-7" /> Open for Service</>}
+          {isProcessing ? (
+            "Securing Coordinates..."
+          ) : (
+            <>
+              <MapPin className="w-7 h-7 mr-2" /> Open for Service
+            </>
+          )}
         </Button>
       </div>
     </div>
+  );
+}
+
+export default function ServiceLocation() {
+  return (
+    <LiquidOSErrorBoundary>
+      <ServiceLocationCore />
+    </LiquidOSErrorBoundary>
   );
 }
