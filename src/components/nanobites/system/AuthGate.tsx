@@ -6,7 +6,7 @@
 
 import React, { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { Mail, KeyRound } from "lucide-react";
+import { Mail, KeyRound, RotateCcw } from "lucide-react";
 import payLogo from "@/assets/idia-pay-logo.jpg";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,7 +16,11 @@ import { toast } from "sonner";
 import { LiquidOSErrorBoundary } from "@/lib/error-boundary";
 import { logPlanck } from "@/lib/error-capture";
 
-function AuthGateCore() {
+interface AuthGateProps {
+  onUnprovisionDevice?: () => void;
+}
+
+function AuthGateCore({ onUnprovisionDevice }: AuthGateProps) {
   const [step, setStep] = useState<"email" | "otp">("email");
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
