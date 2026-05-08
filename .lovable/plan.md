@@ -1,63 +1,82 @@
-## Execution Matrix Installation Plan
+## Goal
 
-Install the three-artifact tenancy system (Context + AuthGate + TenancyProvider) and wire it into the app root. Several **conflicts with existing code** must be reconciled before installing — flagging them here for approval before any file is written.
-
----
-
-### Conflicts found in current architecture
-
-1. **`src/lib/idia/ActiveBusinessContext.tsx` already exists** with a different shape:
-   - Current: `ActiveBusinessProvider({ businessId, provisioningCode })` + `useActiveBusinessId()` (returns `string | null`, logs STALL on null).
-   - Current consumers: `LiquidOS.tsx`, `ServiceLocation.tsx`, `MobilePosSale.tsx`, `HealthPermitLog.tsx`, `TvAVarianceManager.tsx` — all call `useActiveBusinessId()` and expect the existing return contract.
-   - Proposed file changes the contract (adds `role`, `pii`, `logout`, drops `provisioningCode`, drops `ActiveBusinessProvider` export).
-   - **Resolution:** Merge the two contracts — keep the `useActiveBusinessId()` signature returning `string | null` (so existing Nano-Bites keep working untouched), keep `ActiveBusinessProvider` as a passthrough used by `LiquidOS.tsx`, AND add the new `role`, `pii`, `logout` fields plus the new hooks (`useActiveBusinessRole`, `useActiveBusinessPii`, `useTenancyLogout`). The `TenancyProvider` will be the authoritative top-level writer; `ActiveBusinessProvider` inside `LiquidOS.tsx` becomes a no-op pass-through (or is removed from `LiquidOS.tsx`).
-
-2. **`src/routes/__root.tsx` is more complex than the snippet shown.** Current file uses `createRootRouteWithContext<{ queryClient }>()`, defines `shellComponent` (html/head/body + `HeadContent`/`Scripts`), `NotFoundComponent`, `ErrorComponent`, and wraps `<Outlet />` in `QueryClientProvider` + `LiquidOSErrorBoundary`.
-   - The proposed `__root.tsx` snippet would **destroy SSR shell, query client, head metadata, and 404/error boundaries**.
-   - **Resolution:** Surgically insert `<TenancyProvider>` *inside* `QueryClientProvider` and *around* `<Outlet />`, leaving everything else intact.
-
-3. **`life-pii-bridge` edge function does not exist.** Only `fiat-payment-processing` and `flexa-payment-processing` are deployed.
-   - **Resolution:** Per "NO MOCK DATA / power through errors" — the `TenancyProvider` will still invoke it; `piiError` is already non-fatal in the proposed code (it logs STALL and continues with email-only PII). The user must create that edge function separately later. **Flagging this so it is acknowledged**, not blocked.
-
-4. **`AuthGate.tsx` import is wrong**: it imports `LiquidOSErrorBoundary` from `@/lib/error-capture`, but the boundary lives in `@/lib/error-boundary`. `logPlanck` lives in `@/lib/error-capture`. Will be split correctly.
-
-5. **`business_users` and `businesses` tables exist** ✅ — clearance query is valid.
+Re-sequence the boot so **Device Identity (Hub Provisioning Code) runs first**, then **Human Identity (Email OTP)** is gated against the specific business the device just provisioned. Also ensure the auth email delivers a 6-digit code (not a magic link).
 
 ---
 
-### Files to create / modify
+## 1. Remove TenancyProvider from the root
 
-```text
-CREATE  src/components/nanobites/system/AuthGate.tsx
-CREATE  src/providers/TenancyProvider.tsx
-MODIFY  src/lib/idia/ActiveBusinessContext.tsx   (extend contract, preserve back-compat)
-MODIFY  src/routes/__root.tsx                    (insert <TenancyProvider> only)
-```
+**File:** `src/routes/__root.tsx`
 
-No DB migrations. No edge function changes (life-pii-bridge deferred).
+- Delete the `import { TenancyProvider } from "@/providers/TenancyProvider"` line.
+- Unwrap `<TenancyProvider>` from around `<Outlet />` in `RootComponent` so the root only renders `QueryClientProvider → LiquidOSErrorBoundary → Outlet`.
+
+Result: visiting any route boots straight into LiquidOS with no auth prompt.
 
 ---
 
-### Technical details
+## 2. Rewrite `src/providers/TenancyProvider.tsx`
 
-**`ActiveBusinessContext.tsx` (merged contract):**
-- Context value: `{ businessId, provisioningCode, role, pii, logout }`
-- Hooks: `useActiveBusinessId` (existing semantics — returns string|null, logs STALL), `useActiveBusinessRole`, `useActiveBusinessPii`, `useTenancyLogout`
-- Keeps `ActiveBusinessProvider` export so `LiquidOS.tsx` continues to compile unchanged
+Adopt the user-supplied contract:
 
-**`AuthGate.tsx`:** Exact behavior from snippet — email → OTP via `supabase.auth.signInWithOtp` + `verifyOtp({ type: 'email' })`. Wrapped in `LiquidOSErrorBoundary` (imported from `@/lib/error-boundary`). `logPlanck` from `@/lib/error-capture`. Full JSX restored (the user's snippet has rendering gaps from copy/paste).
-
-**`TenancyProvider.tsx`:** Exact state machine from snippet — `booting | unauthenticated | resolving | authenticated | rejected`. Subscribes to `onAuthStateChange`, on `SIGNED_IN`/`INITIAL_SESSION` invokes `life-pii-bridge` (non-fatal), then queries `business_users` filtered by `user_id` + `is_active`, picks first clearance, injects context. Rejected state offers Sign Out.
-
-**`__root.tsx`:** Single surgical change — wrap `<Outlet />` inside `LiquidOSErrorBoundary` with `<TenancyProvider>`. Everything else (shellComponent, HeadContent, Scripts, QueryClientProvider, NotFoundComponent, ErrorComponent, route meta) preserved.
+- New props: `provisionedBusinessId: string`, `onUnprovisionDevice: () => void`, `children`.
+- Resolution query becomes strictly scoped:
+  ```
+  business_users
+    .eq("user_id", session.user.id)
+    .eq("business_id", provisionedBusinessId)   // STRICT
+    .eq("is_active", true)
+  ```
+- Add the `RotateCcw` icon and an "Unbind Device" button on the `rejected` screen that calls `onUnprovisionDevice` (in addition to the existing Sign Out).
+- Re-run resolution when `provisionedBusinessId` changes (effect dep).
+- Restore the typed state (`useState<AuthStatus>("booting")`, `useState<ResolvedTenancy | null>(null)`) and the proper JSX that the user's pasted snippet had stripped — the existing TSX layout (Loader2 booting screen, AuthGate, rejected screen, ActiveBusinessContext.Provider passing `businessId/role/pii/logout/provisioningCode`) is kept verbatim, only the query and the rejected-screen action row change.
 
 ---
 
-### Post-install state
+## 3. Rewrite `src/lib/idia/LiquidOS.tsx`
 
-- Unauthenticated visit to `/` → AuthGate (OTP flow).
-- Authenticated user with no `business_users` row → Rejected screen with Sign Out.
-- Authenticated user with active clearance → existing `LiquidOS` shell renders with `businessId` available via `useActiveBusinessId()` (Nano-Bites keep working).
-- `life-pii-bridge` 404 logs a STALL but does not block — PII falls back to `{ email }` only until the function is deployed.
+- Import `TenancyProvider` from `@/providers/TenancyProvider`.
+- Keep Phase 1 (`provisioning`) **outside** any auth wrapper — the hub code form stays publicly accessible.
+- Compute `tenantId = (phase.carton.raw as any)?.business_id` once Phase 1 completes.
+- Wrap **Phase 2 (`selection`) and Phase 3 (`operational`)** inside:
+  ```tsx
+  <TenancyProvider
+    provisionedBusinessId={tenantId}
+    onUnprovisionDevice={reset}
+  >
+    {/* selection / operational JSX */}
+  </TenancyProvider>
+  ```
+- `NanoBiteRenderer` keeps `ActiveBusinessProvider` as a nested pass-through (TenancyProvider is the authoritative writer; ActiveBusinessProvider just forwards `businessId` + `provisioningCode` to the existing Nano-Bite contract).
+- Preserve all existing JSX, gesture handlers, sidebar state, `DynamicNanoBite`, `BrandMark`, `uniqueScreens`, `prettyTitle`, `isPaymentSpec`, and `recordExecution` flow — only the wrapper around Phases 2/3 changes.
 
-Approve to proceed.
+---
+
+## 4. Magic-link → 6-digit code
+
+Client code is already correct: `AuthGate.tsx` calls `signInWithOtp({ email })` and verifies with `verifyOtp({ type: "email", token })`. Supabase decides link-vs-code purely from the **Magic Link email template** in the dashboard.
+
+Required (one-time, dashboard, not code):
+- Open **Supabase → Authentication → Email Templates → Magic Link**.
+- Replace the body's `{{ .ConfirmationURL }}` with `{{ .Token }}` so the email contains the 6-digit code instead of a clickable link.
+- Save.
+
+No code changes needed for this step — the existing AuthGate already consumes the token. Since you confirmed the IDIA Life infrastructure already has the OTP template, this step may already be done; if codes still aren't arriving after the template swap, we'll inspect Supabase Auth logs.
+
+---
+
+## Technical notes
+
+- `provisioningCode` continues to flow through `ActiveBusinessContext` from the `ActiveBusinessProvider` inside `NanoBiteRenderer`, so existing Nano-Bites that read `useActiveBusinessId()` keep working unchanged.
+- `handleLogout` stays a module-level helper calling `supabase.auth.signOut()`; on sign-out, `onAuthStateChange` flips status to `unauthenticated` → AuthGate re-mounts inside the same provisioned tenancy.
+- `onUnprovisionDevice` (= `LiquidOS.reset`) clears `localStorage[idia_terminal_provision_code]` and returns the shell to Phase 1, fully unbinding the device.
+- No DB migrations, no edge function changes, no new packages.
+
+---
+
+## Files touched
+
+1. `src/routes/__root.tsx` — remove TenancyProvider wrap.
+2. `src/providers/TenancyProvider.tsx` — new strict-business-scoped contract + Unbind action.
+3. `src/lib/idia/LiquidOS.tsx` — wrap Phases 2/3 in TenancyProvider, pass `tenantId` and `reset`.
+4. (Dashboard, not a file) Supabase Magic Link template → use `{{ .Token }}`.

@@ -16,6 +16,7 @@ import {
 
 import SovereignWrapper from "@/components/sovereign/SovereignWrapper";
 import { ActiveBusinessProvider } from "@/lib/idia/ActiveBusinessContext";
+import { TenancyProvider } from "@/providers/TenancyProvider";
 
 /**
  * THE LIQUID ATOM REGISTRY
@@ -229,11 +230,17 @@ export function LiquidOS() {
     );
   }
 
+  // Tenant identity is established by the device provisioning code.
+  // Both Selection and Operational phases run inside the TenancyProvider gate.
+  const tenantId: string =
+    (phase.carton.raw as any)?.business_id ?? phase.carton.provisioningCode;
+
   // ===== SELECTION (Top-Level Module Library) =====
   if (phase.kind === "selection") {
     const looped = [...phase.carton.subModules, ...phase.carton.subModules];
     return (
-      <div 
+      <TenancyProvider provisionedBusinessId={tenantId} onUnprovisionDevice={reset}>
+      <div
         className="min-h-screen flex bg-[#FBFBFD] overflow-hidden relative"
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
@@ -311,6 +318,7 @@ export function LiquidOS() {
           </div>
         </main>
       </div>
+      </TenancyProvider>
     );
   }
 
@@ -322,7 +330,8 @@ export function LiquidOS() {
     .sort((a, b) => a.order - b.order);
 
   return (
-    <div 
+    <TenancyProvider provisionedBusinessId={tenantId} onUnprovisionDevice={reset}>
+    <div
       className="min-h-screen flex bg-[#FBFBFD] overflow-hidden relative"
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
@@ -425,6 +434,7 @@ export function LiquidOS() {
         </div>
       </main>
     </div>
+    </TenancyProvider>
   );
 }
 
