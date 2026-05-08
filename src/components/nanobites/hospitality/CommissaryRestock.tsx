@@ -1075,6 +1075,7 @@ function PhysicalCount({
 }: {
   items: InventoryItem[];
   businessId: string;
+  locationId: string | null;
   onComplete: () => void;
 }) {
   const [counts, setCounts] = useState<Record<string, string>>({});
@@ -1082,6 +1083,10 @@ function PhysicalCount({
 
   const commit = async () => {
     PicoLog("PhysicalCount_Commit", "BEGIN");
+    if (!locationId) {
+      toast.error("No active business location found.");
+      return;
+    }
     const entries = Object.entries(counts).filter(([, v]) => v !== "");
     if (entries.length === 0) {
       toast.error("Nothing counted.");
@@ -1101,6 +1106,8 @@ function PhysicalCount({
           .from("inventory_adjustments")
           .insert({
             business_id: businessId,
+            location_id: locationId,
+            adjustment_number: makeAdjustmentNumber("CT"),
             inventory_item_id: itemId,
             adjustment_type: "physical_count",
             adjustment_quantity: Math.round(delta),
