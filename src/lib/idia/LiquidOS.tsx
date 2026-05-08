@@ -463,9 +463,12 @@ function NanoBiteRenderer({
   }
 
   if (Component) {
+    const tenantId = (carton.raw as any)?.business_id ?? null;
     return (
       <SovereignWrapper id={spec.id}>
-        <Component businessId={(carton.raw as any)?.business_id || "default"} />
+        <ActiveBusinessProvider businessId={tenantId} provisioningCode={carton.provisioningCode}>
+          <Component businessId={tenantId ?? undefined} />
+        </ActiveBusinessProvider>
       </SovereignWrapper>
     );
   }
