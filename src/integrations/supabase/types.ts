@@ -770,6 +770,45 @@ export type Database = {
           },
         ]
       }
+      business_permits: {
+        Row: {
+          business_id: string
+          created_at: string
+          expiration_date: string
+          id: string
+          inspector_name: string | null
+          is_valid: boolean
+          location: string
+          permit_number: string
+          permit_type: string
+          updated_at: string
+        }
+        Insert: {
+          business_id: string
+          created_at?: string
+          expiration_date: string
+          id?: string
+          inspector_name?: string | null
+          is_valid?: boolean
+          location: string
+          permit_number: string
+          permit_type: string
+          updated_at?: string
+        }
+        Update: {
+          business_id?: string
+          created_at?: string
+          expiration_date?: string
+          id?: string
+          inspector_name?: string | null
+          is_valid?: boolean
+          location?: string
+          permit_number?: string
+          permit_type?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       business_processing_queue: {
         Row: {
           business_id: string
