@@ -330,7 +330,8 @@ export function LiquidOS() {
     .sort((a, b) => a.order - b.order);
 
   return (
-    <div 
+    <TenancyProvider provisionedBusinessId={tenantId} onUnprovisionDevice={reset}>
+    <div
       className="min-h-screen flex bg-[#FBFBFD] overflow-hidden relative"
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
