@@ -1,7 +1,11 @@
 /**
  * NANO-BITE ID: sys.core.tenancy
  * NANO-BITE NAME: IDIA Tenancy Provider
- * ROLE: Root Execution Gatekeeper
+ * ROLE: Post-Provisioning Human Identity Gate
+ *
+ * THE LAW: Mounted by LiquidOS only AFTER device provisioning has resolved a
+ * specific business_id. Strictly verifies the human is authorized for THAT
+ * business — never resolves clearance against a generic "first match".
  */
 
 import { useState, useEffect, type ReactNode } from "react";
@@ -13,7 +17,7 @@ import {
   type PiiData,
 } from "@/lib/idia/ActiveBusinessContext";
 import { logPlanck } from "@/lib/error-capture";
-import { Loader2, AlertOctagon } from "lucide-react";
+import { Loader2, AlertOctagon, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 type AuthStatus = "booting" | "unauthenticated" | "resolving" | "authenticated" | "rejected";
@@ -24,12 +28,22 @@ interface ResolvedTenancy {
   pii: PiiData;
 }
 
+interface TenancyProviderProps {
+  provisionedBusinessId: string;
+  onUnprovisionDevice: () => void;
+  children: ReactNode;
+}
+
 const handleLogout = async () => {
   logPlanck("TRIGGER", "AUTH_SIGNOUT", "User initiated sign out.");
   await supabase.auth.signOut();
 };
 
-export function TenancyProvider({ children }: { children: ReactNode }) {
+export function TenancyProvider({
+  provisionedBusinessId,
+  onUnprovisionDevice,
+  children,
+}: TenancyProviderProps) {
   const [status, setStatus] = useState<AuthStatus>("booting");
   const [tenancy, setTenancy] = useState<ResolvedTenancy | null>(null);
 
@@ -38,7 +52,11 @@ export function TenancyProvider({ children }: { children: ReactNode }) {
 
     const resolveTenancy = async (session: Session) => {
       setStatus("resolving");
-      logPlanck("START", "TENANCY_RESOLUTION", "Session verified. Executing IDIA Hub clearance check.");
+      logPlanck(
+        "START",
+        "TENANCY_RESOLUTION",
+        `Executing IDIA Hub clearance check for business: ${provisionedBusinessId}`,
+      );
 
       try {
         // 1. Fetch transient PII from Edge bridge (non-fatal).
@@ -67,18 +85,23 @@ export function TenancyProvider({ children }: { children: ReactNode }) {
           logPlanck("STALL", "PII_BRIDGE_SYNC", "Bridge invocation threw.", bridgeErr);
         }
 
-        // 2. Fetch terminal clearance from IDIA Hub (business_users).
-        logPlanck("PROCESS", "HUB_CLEARANCE", "Querying business_users for active roles.");
+        // 2. THE LAW: clearance must exist for THIS specific provisioned business.
+        logPlanck(
+          "PROCESS",
+          "HUB_CLEARANCE",
+          `Querying business_users scoped to ${provisionedBusinessId}.`,
+        );
         const { data: hubData, error: hubError } = await supabase
           .from("business_users")
           .select("business_id, role")
           .eq("user_id", session.user.id)
+          .eq("business_id", provisionedBusinessId)
           .eq("is_active", true);
 
         if (hubError) throw hubError;
 
         if (!hubData || hubData.length === 0) {
-          logPlanck("FATAL", "HUB_CLEARANCE", "User has no active business clearances.");
+          logPlanck("FATAL", "HUB_CLEARANCE", "User has no active clearance for this terminal.");
           setStatus("rejected");
           return;
         }
@@ -120,7 +143,7 @@ export function TenancyProvider({ children }: { children: ReactNode }) {
 
     return () => subscription.unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [provisionedBusinessId]);
 
   // --- RENDER MATRIX ---
   if (status === "booting" || status === "resolving") {
@@ -147,14 +170,19 @@ export function TenancyProvider({ children }: { children: ReactNode }) {
         <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
           <AlertOctagon className="w-8 h-8 text-destructive" />
         </div>
-        <h1 className="text-2xl font-black text-foreground">Access Denied</h1>
+        <h1 className="text-2xl font-black text-foreground">Terminal Locked</h1>
         <p className="text-sm text-muted-foreground max-w-md">
-          Your IDIA Life account is active, but you are not provisioned to operate any active IDIA Pay
-          terminals. Please contact your Org Admin.
+          Your IDIA Life account is active, but you do not hold active clearance to operate this
+          specific terminal. Contact your Org Admin.
         </p>
-        <Button onClick={handleLogout} variant="outline" className="mt-2">
-          Sign Out & Switch Account
-        </Button>
+        <div className="flex flex-col sm:flex-row gap-2 mt-2">
+          <Button onClick={handleLogout} variant="outline">
+            Sign Out Human
+          </Button>
+          <Button onClick={onUnprovisionDevice} variant="ghost">
+            <RotateCcw className="w-4 h-4 mr-2" /> Unbind Device
+          </Button>
+        </div>
       </div>
     );
   }
