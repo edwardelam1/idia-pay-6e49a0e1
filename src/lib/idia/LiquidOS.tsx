@@ -434,6 +434,7 @@ export function LiquidOS() {
         </div>
       </main>
     </div>
+    </TenancyProvider>
   );
 }
 
