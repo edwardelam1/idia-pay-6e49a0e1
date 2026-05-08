@@ -179,10 +179,10 @@ function AuthGateCore({ onUnprovisionDevice }: AuthGateProps) {
   );
 }
 
-export default function AuthGate() {
+export default function AuthGate(props: AuthGateProps) {
   return (
     <LiquidOSErrorBoundary>
-      <AuthGateCore />
+      <AuthGateCore {...props} />
     </LiquidOSErrorBoundary>
   );
 }
