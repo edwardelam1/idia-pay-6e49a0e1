@@ -9,6 +9,12 @@ import {
 } from "@tanstack/react-router";
 
 import appCss from "../styles.css?url";
+import { LiquidOSErrorBoundary, injectResizeObserverShield, logPlanck } from "@/lib/error-capture";
+
+if (typeof window !== "undefined") {
+  injectResizeObserverShield();
+  logPlanck("START", "APP_BOOT", "LiquidOS Core routing initialized.");
+}
 
 function NotFoundComponent() {
   return (
@@ -113,7 +119,9 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <Outlet />
+      <LiquidOSErrorBoundary>
+        <Outlet />
+      </LiquidOSErrorBoundary>
     </QueryClientProvider>
   );
 }
