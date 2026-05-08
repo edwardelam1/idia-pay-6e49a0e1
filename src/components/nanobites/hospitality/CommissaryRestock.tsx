@@ -203,16 +203,30 @@ export default function CommissaryRestockFactory({
     PicoLog("SyncLedger", "BEGIN", { businessId });
     setIsLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("inventory_items")
-        .select(
-          "id,business_id,name,category,unit_of_measure,current_cost,par_level,current_stock,barcode,vendor_sku,storage_requirements,is_active",
-        )
-        .eq("business_id", businessId)
-        .order("name", { ascending: true });
-      if (error) throw error;
-      setInventory((data ?? []) as InventoryItem[]);
-      PicoLog("SyncLedger", "INFO", { count: data?.length ?? 0 });
+      const [itemsRes, locRes] = await Promise.all([
+        supabase
+          .from("inventory_items")
+          .select(
+            "id,business_id,name,category,unit_of_measure,current_cost,par_level,current_stock,barcode,vendor_sku,storage_requirements,is_active",
+          )
+          .eq("business_id", businessId)
+          .order("name", { ascending: true }),
+        supabase
+          .from("business_locations")
+          .select("id")
+          .eq("business_id", businessId)
+          .eq("is_active", true)
+          .limit(1)
+          .maybeSingle(),
+      ]);
+      if (itemsRes.error) throw itemsRes.error;
+      if (locRes.error) throw locRes.error;
+      setInventory((itemsRes.data ?? []) as InventoryItem[]);
+      setLocationId(locRes.data?.id ?? null);
+      PicoLog("SyncLedger", "INFO", {
+        count: itemsRes.data?.length ?? 0,
+        locationId: locRes.data?.id ?? null,
+      });
     } catch (e) {
       PicoLog("SyncLedger", "ERROR", (e as Error).message);
       toast.error(`Ledger stall: ${(e as Error).message}`);
