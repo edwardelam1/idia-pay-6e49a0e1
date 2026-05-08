@@ -421,6 +421,7 @@ export default function CommissaryRestockFactory({
                       <ReceivePO
                         items={inventory}
                         businessId={businessId}
+                        locationId={locationId}
                         onComplete={() => {
                           void syncLedger();
                           setActiveIdx(0);
@@ -431,6 +432,7 @@ export default function CommissaryRestockFactory({
                       <PhysicalCount
                         items={inventory}
                         businessId={businessId}
+                        locationId={locationId}
                         onComplete={() => {
                           void syncLedger();
                           setActiveIdx(0);
@@ -447,6 +449,7 @@ export default function CommissaryRestockFactory({
                       <AdjustStock
                         items={inventory}
                         businessId={businessId}
+                        locationId={locationId}
                         onComplete={() => {
                           void syncLedger();
                           setActiveIdx(0);
