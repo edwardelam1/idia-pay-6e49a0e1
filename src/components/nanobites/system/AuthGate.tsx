@@ -6,7 +6,8 @@
 
 import React, { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { ShieldCheck, Mail, KeyRound } from "lucide-react";
+import { Mail, KeyRound } from "lucide-react";
+import payLogo from "@/assets/idia-pay-logo.jpg";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
