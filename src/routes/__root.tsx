@@ -11,6 +11,7 @@ import {
 import appCss from "../styles.css?url";
 import { injectResizeObserverShield, logPlanck } from "@/lib/error-capture";
 import { LiquidOSErrorBoundary } from "@/lib/error-boundary";
+import { TenancyProvider } from "@/providers/TenancyProvider";
 
 if (typeof window !== "undefined") {
   injectResizeObserverShield();
@@ -121,7 +122,9 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       <LiquidOSErrorBoundary>
-        <Outlet />
+        <TenancyProvider>
+          <Outlet />
+        </TenancyProvider>
       </LiquidOSErrorBoundary>
     </QueryClientProvider>
   );
