@@ -79,13 +79,21 @@ function TerminalProvisionGateCore({ onProvisioned }: TerminalProvisionGateProps
       logPlanck("PROCESS", "PROVISION_LOOKUP", "Querying authoritative ledger.");
 
       let targetBusiness: { id: string; name: string } | null = null;
+      const db = supabase as unknown as {
+        from: (t: string) => {
+          select: (c: string) => {
+            contains: (col: string, val: unknown) => { maybeSingle: () => Promise<{ data: unknown; error: unknown }> };
+            eq: (col: string, val: unknown) => { maybeSingle: () => Promise<{ data: unknown; error: unknown }> };
+          };
+        };
+      };
 
       // ATTEMPT A: multi-issue codes column (jsonb/text[]: provisioning_codes)
       try {
-        const { data: arrayData } = await supabase
-          .from("businesses" as any)
+        const { data: arrayData } = await db
+          .from("businesses")
           .select("id, name")
-          .contains("provisioning_codes" as any, [sanitizedCode])
+          .contains("provisioning_codes", [sanitizedCode])
           .maybeSingle();
         if (arrayData) targetBusiness = arrayData as { id: string; name: string };
       } catch (arrErr) {
@@ -94,12 +102,12 @@ function TerminalProvisionGateCore({ onProvisioned }: TerminalProvisionGateProps
 
       // ATTEMPT B: legacy single-string column
       if (!targetBusiness) {
-        const { data: singleData, error: singleError } = await supabase
-          .from("businesses" as any)
+        const { data: singleData, error: singleError } = await db
+          .from("businesses")
           .select("id, name")
-          .eq("provisioning_code" as any, sanitizedCode)
+          .eq("provisioning_code", sanitizedCode)
           .maybeSingle();
-        if (singleError) throw singleError;
+        if (singleError) throw singleError as Error;
         if (singleData) targetBusiness = singleData as { id: string; name: string };
       }
 
