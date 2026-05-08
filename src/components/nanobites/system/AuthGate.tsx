@@ -115,6 +115,17 @@ function AuthGateCore({ onUnprovisionDevice }: AuthGateProps) {
               >
                 {isProcessing ? "TRANSMITTING..." : "REQUEST CLEARANCE"}
               </Button>
+              {onUnprovisionDevice && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={onUnprovisionDevice}
+                  disabled={isProcessing}
+                  className="w-full text-xs uppercase tracking-widest text-muted-foreground"
+                >
+                  <RotateCcw className="w-4 h-4 mr-2" /> Detach Hardware From Fleet
+                </Button>
+              )}
             </form>
           ) : (
             <form onSubmit={handleVerifyOtp} className="space-y-5">
