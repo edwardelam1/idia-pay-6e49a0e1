@@ -3469,6 +3469,66 @@ export type Database = {
           },
         ]
       }
+      inventory_variances: {
+        Row: {
+          actual_yield: number
+          batch_id: string
+          business_id: string
+          created_at: string
+          created_by: string | null
+          id: string
+          inventory_item_id: string | null
+          item_name: string
+          location_id: string | null
+          resolved_at: string | null
+          status: string
+          theoretical_yield: number
+          tolerance_threshold: number
+          unit: string
+          unit_cost: number
+          value_lost: number | null
+          variance_amount: number | null
+        }
+        Insert: {
+          actual_yield: number
+          batch_id: string
+          business_id: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          inventory_item_id?: string | null
+          item_name: string
+          location_id?: string | null
+          resolved_at?: string | null
+          status?: string
+          theoretical_yield: number
+          tolerance_threshold?: number
+          unit?: string
+          unit_cost?: number
+          value_lost?: number | null
+          variance_amount?: number | null
+        }
+        Update: {
+          actual_yield?: number
+          batch_id?: string
+          business_id?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          inventory_item_id?: string | null
+          item_name?: string
+          location_id?: string | null
+          resolved_at?: string | null
+          status?: string
+          theoretical_yield?: number
+          tolerance_threshold?: number
+          unit?: string
+          unit_cost?: number
+          value_lost?: number | null
+          variance_amount?: number | null
+        }
+        Relationships: []
+      }
       invoice_line_items: {
         Row: {
           created_at: string | null
@@ -7324,6 +7384,47 @@ export type Database = {
         }
         Relationships: []
       }
+      variance_corrections: {
+        Row: {
+          business_id: string
+          corrective_action: string
+          id: string
+          manager_auth_pin_hash: string
+          reconciled_at: string
+          reconciled_by: string | null
+          root_cause: string
+          variance_id: string
+        }
+        Insert: {
+          business_id: string
+          corrective_action: string
+          id?: string
+          manager_auth_pin_hash: string
+          reconciled_at?: string
+          reconciled_by?: string | null
+          root_cause: string
+          variance_id: string
+        }
+        Update: {
+          business_id?: string
+          corrective_action?: string
+          id?: string
+          manager_auth_pin_hash?: string
+          reconciled_at?: string
+          reconciled_by?: string | null
+          root_cause?: string
+          variance_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "variance_corrections_variance_id_fkey"
+            columns: ["variance_id"]
+            isOneToOne: false
+            referencedRelation: "inventory_variances"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       wallets: {
         Row: {
           cash_balance: number | null
@@ -7953,6 +8054,8 @@ export type Database = {
         Returns: Json
       }
       invoke_refiner_secure: { Args: { payload: Json }; Returns: undefined }
+      is_business_manager: { Args: { _business_id: string }; Returns: boolean }
+      is_business_member: { Args: { _business_id: string }; Returns: boolean }
       is_org_admin: { Args: { _business_id: string }; Returns: boolean }
       log_delt_egress: {
         Args: {
@@ -8149,6 +8252,15 @@ export type Database = {
             }
             Returns: Json
           }
+      submit_variance_correction: {
+        Args: {
+          _corrective_action: string
+          _manager_pin: string
+          _root_cause: string
+          _variance_id: string
+        }
+        Returns: string
+      }
       trigger_daily_apple_health_sync: {
         Args: never
         Returns: {

@@ -15,6 +15,7 @@ import {
 } from "@/lib/idia/executions";
 
 import SovereignWrapper from "@/components/sovereign/SovereignWrapper";
+import { ActiveBusinessProvider } from "@/lib/idia/ActiveBusinessContext";
 
 /**
  * THE LIQUID ATOM REGISTRY
@@ -29,6 +30,7 @@ const ATOM_FILE_MAP: Record<string, string> = {
   "hosp.ft.sales.mobile_pos": "MobilePosSale",
   "hosp.ft.infra.health": "HealthPermitLog",
   "hosp.ft.ops.restock": "CommissaryRestock",
+  "hosp.ft.ops.tva.variance": "TvAVarianceManager",
 };
 
 type Phase =
@@ -462,9 +464,12 @@ function NanoBiteRenderer({
   }
 
   if (Component) {
+    const tenantId = (carton.raw as any)?.business_id ?? null;
     return (
       <SovereignWrapper id={spec.id}>
-        <Component businessId={(carton.raw as any)?.business_id || "default"} />
+        <ActiveBusinessProvider businessId={tenantId} provisioningCode={carton.provisioningCode}>
+          <Component businessId={tenantId ?? undefined} />
+        </ActiveBusinessProvider>
       </SovereignWrapper>
     );
   }
