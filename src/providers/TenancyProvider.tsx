@@ -1,17 +1,20 @@
 /**
  * NANO-BITE ID: sys.core.tenancy
  * NANO-BITE NAME: IDIA Tenancy Provider
- * ROLE: Post-Provisioning Human Identity Gate
+ * ROLE: Root Execution Gatekeeper & Hardware Binder
  *
- * THE LAW: Mounted by LiquidOS only AFTER device provisioning has resolved a
- * specific business_id. Strictly verifies the human is authorized for THAT
- * business — never resolves clearance against a generic "first match".
+ * THE LAW: Owns BOTH the device-binding (TerminalProvisionGate) and the
+ * human-binding (AuthGate). Hands a fully cleared ActiveBusinessContext
+ * down to LiquidOS only after both gates pass.
  */
 
 import { useState, useEffect, type ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import AuthGate from "@/components/nanobites/system/AuthGate";
+import TerminalProvisionGate, {
+  HardwareStorage,
+} from "@/components/nanobites/system/TerminalProvisionGate";
 import {
   ActiveBusinessContext,
   type PiiData,
@@ -20,7 +23,13 @@ import { logPlanck } from "@/lib/error-capture";
 import { Loader2, AlertOctagon, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-type AuthStatus = "booting" | "unauthenticated" | "resolving" | "authenticated" | "rejected";
+type AuthStatus =
+  | "booting"
+  | "unprovisioned"
+  | "unauthenticated"
+  | "resolving"
+  | "authenticated"
+  | "rejected";
 
 interface ResolvedTenancy {
   businessId: string;
@@ -28,39 +37,35 @@ interface ResolvedTenancy {
   pii: PiiData;
 }
 
-interface TenancyProviderProps {
-  provisionedBusinessId: string;
-  onUnprovisionDevice: () => void;
-  children: ReactNode;
-}
-
-const handleLogout = async () => {
-  logPlanck("TRIGGER", "AUTH_SIGNOUT", "User initiated sign out.");
-  await supabase.auth.signOut();
-};
-
-export function TenancyProvider({
-  provisionedBusinessId,
-  onUnprovisionDevice,
-  children,
-}: TenancyProviderProps) {
+export function TenancyProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>("booting");
+  const [provisionedBusinessId, setProvisionedBusinessId] = useState<string | null>(null);
+  const [provisionedCode, setProvisionedCode] = useState<string | null>(null);
   const [tenancy, setTenancy] = useState<ResolvedTenancy | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
 
+    logPlanck("START", "BOOT_SEQUENCE", "TenancyProvider mounting. Checking native hardware bindings.");
+
+    const storedBusinessId = HardwareStorage.getItem("idia_provisioned_business_id");
+    const storedCode = HardwareStorage.getItem("idia_provisioned_code");
+
+    if (!storedBusinessId || !storedCode) {
+      logPlanck("STALL", "DEVICE_UNLINKED", "No hardware binding. Halting for provisioning.");
+      setStatus("unprovisioned");
+      return;
+    }
+
+    logPlanck("PROCESS", "DEVICE_LINKED", `Hardware linked to business: ${storedBusinessId}`);
+    setProvisionedBusinessId(storedBusinessId);
+    setProvisionedCode(storedCode);
+
     const resolveTenancy = async (session: Session) => {
       setStatus("resolving");
-      logPlanck(
-        "START",
-        "TENANCY_RESOLUTION",
-        `Executing IDIA Hub clearance check for business: ${provisionedBusinessId}`,
-      );
+      logPlanck("START", "TENANCY_RESOLUTION", "Session verified. Executing IDIA Hub clearance check.");
 
       try {
-        // 1. Fetch transient PII from Edge bridge (non-fatal).
-        logPlanck("PROCESS", "PII_BRIDGE_SYNC", "Fetching PII from life-pii-bridge.");
         let piiData: PiiData = {
           first_name: null,
           last_name: null,
@@ -72,9 +77,7 @@ export function TenancyProvider({
         try {
           const { data: edgeData, error: piiError } = await supabase.functions.invoke(
             "life-pii-bridge",
-            {
-              headers: { Authorization: `Bearer ${session.access_token}` },
-            },
+            { headers: { Authorization: `Bearer ${session.access_token}` } },
           );
           if (piiError) {
             logPlanck("STALL", "PII_BRIDGE_SYNC", "Bridge unreachable.", piiError);
@@ -85,17 +88,16 @@ export function TenancyProvider({
           logPlanck("STALL", "PII_BRIDGE_SYNC", "Bridge invocation threw.", bridgeErr);
         }
 
-        // 2. THE LAW: clearance must exist for THIS specific provisioned business.
         logPlanck(
           "PROCESS",
           "HUB_CLEARANCE",
-          `Querying business_users scoped to ${provisionedBusinessId}.`,
+          `Querying business_users scoped to terminal: ${storedBusinessId}`,
         );
         const { data: hubData, error: hubError } = await supabase
           .from("business_users")
           .select("business_id, role")
           .eq("user_id", session.user.id)
-          .eq("business_id", provisionedBusinessId)
+          .eq("business_id", storedBusinessId)
           .eq("is_active", true);
 
         if (hubError) throw hubError;
@@ -145,6 +147,23 @@ export function TenancyProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [provisionedBusinessId]);
 
+  const handleLogout = async () => {
+    logPlanck("TRIGGER", "AUTH_SIGNOUT", "User initiated human sign out.");
+    await supabase.auth.signOut();
+  };
+
+  const handleUnprovisionDevice = async () => {
+    logPlanck("TRIGGER", "DEVICE_UNBIND", "Wiping native secure hardware constraints.");
+    HardwareStorage.removeItem("idia_provisioned_business_id");
+    HardwareStorage.removeItem("idia_provisioned_business_name");
+    HardwareStorage.removeItem("idia_provisioned_code");
+    await supabase.auth.signOut();
+    setTenancy(null);
+    setProvisionedBusinessId(null);
+    setProvisionedCode(null);
+    setStatus("unprovisioned");
+  };
+
   // --- RENDER MATRIX ---
   if (status === "booting" || status === "resolving") {
     return (
@@ -160,8 +179,20 @@ export function TenancyProvider({
     );
   }
 
+  if (status === "unprovisioned") {
+    return (
+      <TerminalProvisionGate
+        onProvisioned={(bId) => {
+          setProvisionedBusinessId(bId);
+          setProvisionedCode(HardwareStorage.getItem("idia_provisioned_code"));
+          setStatus("unauthenticated");
+        }}
+      />
+    );
+  }
+
   if (status === "unauthenticated") {
-    return <AuthGate />;
+    return <AuthGate onUnprovisionDevice={handleUnprovisionDevice} />;
   }
 
   if (status === "rejected") {
@@ -172,15 +203,15 @@ export function TenancyProvider({
         </div>
         <h1 className="text-2xl font-black text-foreground">Terminal Locked</h1>
         <p className="text-sm text-muted-foreground max-w-md">
-          Your IDIA Life account is active, but you do not hold active clearance to operate this
+          Your IDIA Life identity is valid, but you do not hold active clearance to operate this
           specific terminal. Contact your Org Admin.
         </p>
         <div className="flex flex-col sm:flex-row gap-2 mt-2">
           <Button onClick={handleLogout} variant="outline">
             Sign Out Human
           </Button>
-          <Button onClick={onUnprovisionDevice} variant="ghost">
-            <RotateCcw className="w-4 h-4 mr-2" /> Unbind Device
+          <Button onClick={handleUnprovisionDevice} variant="ghost">
+            <RotateCcw className="w-4 h-4 mr-2" /> Detach Hardware From Fleet
           </Button>
         </div>
       </div>
@@ -192,7 +223,7 @@ export function TenancyProvider({
     <ActiveBusinessContext.Provider
       value={{
         businessId: tenancy!.businessId,
-        provisioningCode: null,
+        provisioningCode: provisionedCode,
         role: tenancy!.role,
         pii: tenancy!.pii,
         logout: handleLogout,

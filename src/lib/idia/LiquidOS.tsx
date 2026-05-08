@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useContext, useEffect, useState, type ReactNode } from "react";
 import idiaLogo from "@/assets/idia-logo.png";
 import payLogo from "@/assets/idia-pay-logo.jpg";
 import {
@@ -15,15 +15,16 @@ import {
 } from "@/lib/idia/executions";
 
 import SovereignWrapper from "@/components/sovereign/SovereignWrapper";
-import { ActiveBusinessProvider } from "@/lib/idia/ActiveBusinessContext";
-import { TenancyProvider } from "@/providers/TenancyProvider";
+import {
+  ActiveBusinessContext,
+  ActiveBusinessProvider,
+} from "@/lib/idia/ActiveBusinessContext";
 
 /**
  * THE LIQUID ATOM REGISTRY
- * Eagerly loads all physical Nano-bites at build time. 
- * If a file is missing, Vite ignores it instead of crashing.
+ * Eagerly loads all physical Nano-bites at build time.
  */
-const rawAtoms = import.meta.glob('/src/components/nanobites/**/*.tsx', { eager: true });
+const rawAtoms = import.meta.glob("/src/components/nanobites/**/*.tsx", { eager: true });
 
 const ATOM_FILE_MAP: Record<string, string> = {
   "hosp.ft.ops.service_loc": "ServiceLocation",
@@ -35,7 +36,8 @@ const ATOM_FILE_MAP: Record<string, string> = {
 };
 
 type Phase =
-  | { kind: "provisioning" }
+  | { kind: "loading" }
+  | { kind: "error"; message: string }
   | { kind: "selection"; carton: VerticalCarton }
   | { kind: "operational"; carton: VerticalCarton; subModule: SubModule };
 
@@ -45,201 +47,106 @@ const SURFACE_STYLE: React.CSSProperties = {
   WebkitBackdropFilter: "blur(30px)",
 };
 
-// ============================================================================
-// TERMINAL SESSION ANCHOR (LOCAL STORAGE)
-// ============================================================================
-const PROVISION_KEY = 'idia_terminal_provision_code';
-
 export function LiquidOS() {
-  const [phase, setPhase] = useState<Phase>({ kind: "provisioning" });
+  const { provisioningCode, logout } = useContext(ActiveBusinessContext);
+  const [phase, setPhase] = useState<Phase>({ kind: "loading" });
   const [activeScreen, setActiveScreen] = useState<string | null>(null);
-  const [code, setCode] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
 
-  // --- MOBILE FIRST GESTURE & SIDEBAR STATE ---
-  // THE LAW: Default is exposed/uncollapsed
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
 
-  // --- AUTOMATIC HARDWARE RE-HYDRATION ---
   useEffect(() => {
-    const storedCode = localStorage.getItem(PROVISION_KEY);
-    if (storedCode) {
-      console.log(`[SESSION_RESTORED]: Hardware anchor detected for code: ${storedCode}`);
-      setCode(storedCode);
-      executeProvisioning(storedCode);
-    }
-  }, []);
+    if (!provisioningCode) return;
+    let cancelled = false;
+    (async () => {
+      console.log(`[LIQUIDOS_HYDRATE]: Fetching carton for code ${provisioningCode}`);
+      try {
+        const carton = await fetchProvisioningBlueprint(provisioningCode);
+        if (cancelled) return;
+        if (!carton || !carton.subModules || carton.subModules.length === 0) {
+          setPhase({
+            kind: "error",
+            message: `No manifest found for "${provisioningCode}". Verify Hub config.`,
+          });
+          return;
+        }
+        if (carton.subModules.length === 1) {
+          const sm = carton.subModules[0];
+          setActiveScreen(uniqueScreens(sm)[0] ?? null);
+          setPhase({ kind: "operational", carton, subModule: sm });
+        } else {
+          setPhase({ kind: "selection", carton });
+        }
+      } catch (err) {
+        console.error("[LIQUIDOS_HYDRATE]: failed", err);
+        if (!cancelled) {
+          setPhase({ kind: "error", message: "System failure during manifest retrieval." });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [provisioningCode]);
 
-  // --- GESTURE TELEMETRY ---
-  const handleTouchStart = (e: React.TouchEvent) => {
-    setTouchStartX(e.touches[0].clientX);
-  };
-
+  const handleTouchStart = (e: React.TouchEvent) => setTouchStartX(e.touches[0].clientX);
   const handleTouchEnd = (e: React.TouchEvent) => {
     if (touchStartX === null) return;
-    const touchEndX = e.changedTouches[0].clientX;
-    const diffX = touchStartX - touchEndX;
-
-    // THE LAW: Swipe Left to Hide (> 50px delta)
-    if (diffX > 50) {
-      setIsSidebarOpen(false);
-    }
-    // THE LAW: Pull Right from Edge to Reveal (< -50px delta AND started within 40px of edge)
-    else if (diffX < -50 && touchStartX < 40) {
-      setIsSidebarOpen(true);
-    }
+    const diffX = touchStartX - e.changedTouches[0].clientX;
+    if (diffX > 50) setIsSidebarOpen(false);
+    else if (diffX < -50 && touchStartX < 40) setIsSidebarOpen(true);
     setTouchStartX(null);
   };
 
-  // --- CORE PROVISIONING ENGINE ---
-  async function executeProvisioning(provisionCode: string) {
-    console.log(`[BEGIN] executeProvisioning for code: ${provisionCode}`);
-    setError(null);
-    setLoading(true);
-    
-    try {
-      console.log(`[INFO] executeProvisioning: Fetching provisioning blueprint.`);
-      
-      const carton = await fetchProvisioningBlueprint(provisionCode);
-      console.log(`[DIAGNOSTIC]: Payload returned from registry in this environment:`, carton);
-      
-      if (!carton || !carton.subModules || carton.subModules.length === 0) {
-        console.warn(`[WARN] executeProvisioning: HALT - No manifest found for code: ${provisionCode}`);
-        setError(`No manifest found for "${provisionCode}". Verify the Hub provisioning code.`);
-        localStorage.removeItem(PROVISION_KEY); 
-        setPhase({ kind: "provisioning" });
-        return;
-      }
-
-      console.log(`[INFO] executeProvisioning: Manifest retrieved with ${carton.subModules.length} submodules.`);
-      
-      localStorage.setItem(PROVISION_KEY, provisionCode);
-      console.log(`[SESSION_DATA]: Hardware anchor secured in LocalStorage.`);
-
-      // THE LAW: Maintain default exposed state on launch, regardless of module count.
-      setIsSidebarOpen(true); 
-
-      if (carton.subModules.length === 1) {
-        const sm = carton.subModules[0];
-        const tags = uniqueScreens(sm);
-        console.log(`[INFO] executeProvisioning: Single sub-module optimization triggered for: ${sm.id}`);
-        setActiveScreen(tags[0] ?? null);
-        setPhase({ kind: "operational", carton, subModule: sm });
-      } else {
-        setPhase({ kind: "selection", carton });
-      }
-    } catch (err: any) {
-      console.error(`[ERROR] executeProvisioning failed:`, err.message, err.stack);
-      setError("System failure during manifest retrieval.");
-      localStorage.removeItem(PROVISION_KEY); 
-    } finally {
-      setLoading(false);
-      console.log(`[END] executeProvisioning for code: ${provisionCode}`);
-    }
+  function chooseSubModule(sm: SubModule, carton: VerticalCarton) {
+    setActiveScreen(uniqueScreens(sm)[0] ?? null);
+    setPhase({ kind: "operational", carton, subModule: sm });
+    setIsSidebarOpen(false);
   }
 
-  async function handleProvision(e: FormEvent) {
-    e.preventDefault();
-    if (!code.trim()) return;
-    await executeProvisioning(code.trim());
-  }
-
-  async function chooseSubModule(sm: SubModule, carton: VerticalCarton) {
-    console.log(`[BEGIN] chooseSubModule execution for submodule: ${sm.id}`);
-    try {
-      const tags = uniqueScreens(sm);
-      setActiveScreen(tags[0] ?? null);
-      setPhase({ kind: "operational", carton, subModule: sm });
-      
-      // Auto-hide ONLY upon an explicit user selection
-      setIsSidebarOpen(false); 
-      console.log(`[INFO] chooseSubModule: Stage built with ${tags.length} screens.`);
-    } catch (err: any) {
-      console.error(`[ERROR] chooseSubModule execution failed:`, err.message);
-    } finally {
-      console.log(`[END] chooseSubModule execution for submodule: ${sm.id}`);
-    }
-  }
-
-  // --- TERMINAL LOGOUT ---
-  function reset() {
-    console.log("[BEGIN] reset session execution.");
-    try {
-      localStorage.removeItem(PROVISION_KEY);
-      setPhase({ kind: "provisioning" });
-      setActiveScreen(null);
-      setCode("");
-      setError(null);
-      setIsSidebarOpen(true); 
-      console.log("[SESSION_END]: Active memory and hardware anchor cleared. Terminal unlocked.");
-    } catch (err: any) {
-      console.error(`[ERROR] reset execution failed:`, err.message);
-    } finally {
-      console.log("[END] reset session execution.");
-    }
-  }
-
-  // ===== PROVISIONING =====
-  if (phase.kind === "provisioning") {
+  // ===== LOADING =====
+  if (phase.kind === "loading") {
     return (
       <div className="min-h-screen flex items-center justify-center px-6">
-        <div className="w-full max-w-md flex flex-col items-center gap-8">
+        <div className="flex flex-col items-center gap-4">
           <BrandMark />
-          <form onSubmit={handleProvision} className="w-full flex flex-col gap-3">
-            <label className="text-[12px] font-semibold tracking-[0.14em] text-muted-foreground uppercase text-center">
-              Hub Provisioning Code
-            </label>
-            <input
-              autoFocus
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="IDIA-XXXX-XXXX"
-              disabled={loading}
-              className="h-14 px-5 text-center text-[18px] font-semibold tracking-wide bg-white focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
-              style={{
-                borderRadius: 18,
-                border: "1px solid #F2F2F7",
-                boxShadow: "var(--idia-shadow-card)",
-              }}
-            />
-            <p className="text-[12px] text-muted-foreground text-center">
-              {loading ? "Hydrating from The Hub…" : (
-                <>Press <kbd className="px-1.5 py-0.5 rounded bg-secondary font-mono">Enter</kbd> to hydrate the OS</>
-              )}
-            </p>
-            {error && (
-              <div
-                className="mt-2 p-4 text-center"
-                style={{
-                  borderRadius: 28,
-                  border: "1px solid #FF3B30",
-                  background: "rgba(255,59,48,0.04)",
-                }}
-              >
-                <p className="text-[11px] font-semibold tracking-[0.14em] uppercase" style={{ color: "#FF3B30" }}>
-                  Sovereign Error
-                </p>
-                <p className="text-[13px] mt-1 text-foreground">{error}</p>
-              </div>
-            )}
-          </form>
+          <p className="text-[12px] text-muted-foreground">Hydrating workspace…</p>
         </div>
       </div>
     );
   }
 
-  // Tenant identity is established by the device provisioning code.
-  // Both Selection and Operational phases run inside the TenancyProvider gate.
-  const tenantId: string =
-    (phase.carton.raw as any)?.business_id ?? phase.carton.provisioningCode;
+  // ===== ERROR =====
+  if (phase.kind === "error") {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-6">
+        <div
+          className="max-w-md w-full bg-white p-8 text-center"
+          style={{ borderRadius: 28, border: "1px solid #FF3B30" }}
+        >
+          <p
+            className="text-[11px] font-semibold tracking-[0.14em] uppercase"
+            style={{ color: "#FF3B30" }}
+          >
+            Hydration Failed
+          </p>
+          <p className="text-[14px] mt-2 text-foreground">{phase.message}</p>
+          <button
+            onClick={() => void logout()}
+            className="mt-5 h-11 px-6 text-white text-[13px] font-semibold"
+            style={{ borderRadius: 14, background: "var(--idia-gradient)" }}
+          >
+            Sign Out
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // ===== SELECTION (Top-Level Module Library) =====
   if (phase.kind === "selection") {
     const looped = [...phase.carton.subModules, ...phase.carton.subModules];
     return (
-      <TenancyProvider provisionedBusinessId={tenantId} onUnprovisionDevice={reset}>
       <div
         className="min-h-screen flex bg-[#FBFBFD] overflow-hidden relative"
         onTouchStart={handleTouchStart}
@@ -256,7 +163,9 @@ export function LiquidOS() {
               <img src={payLogo} alt="IDIA Pay" className="h-9 w-9 rounded-[10px]" />
               <div>
                 <p className="text-[14px] font-semibold leading-tight">IDIA Pay</p>
-                <p className="text-[11px] text-muted-foreground leading-tight">{phase.carton.industry}</p>
+                <p className="text-[11px] text-muted-foreground leading-tight">
+                  {phase.carton.industry}
+                </p>
               </div>
             </div>
             <p className="mt-5 text-[10px] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
@@ -285,17 +194,17 @@ export function LiquidOS() {
               ))}
             </div>
           </div>
-          
+
           <div className="p-4 border-t border-border">
             <button
-              onClick={reset}
+              onClick={() => void logout()}
               className="text-[12px] text-muted-foreground hover:text-foreground w-full text-left"
             >
               ↻ End Session
             </button>
           </div>
         </aside>
-        
+
         <main className="flex-1 w-full flex items-center justify-center px-6 sm:px-10">
           <div
             className="max-w-lg w-full bg-white p-10 text-center"
@@ -308,17 +217,14 @@ export function LiquidOS() {
             <p className="text-[12px] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
               {phase.carton.industry}
             </p>
-            <h1 className="text-[28px] font-semibold tracking-tight mt-2">
-              Select a Module
-            </h1>
+            <h1 className="text-[28px] font-semibold tracking-tight mt-2">Select a Module</h1>
             <p className="text-[14px] text-muted-foreground mt-3 leading-relaxed">
-              {phase.carton.subModules.length} operational units are available. 
+              {phase.carton.subModules.length} operational units are available.
               {!isSidebarOpen && " Pull from the left edge to reveal the menu."}
             </p>
           </div>
         </main>
       </div>
-      </TenancyProvider>
     );
   }
 
@@ -330,7 +236,6 @@ export function LiquidOS() {
     .sort((a, b) => a.order - b.order);
 
   return (
-    <TenancyProvider provisionedBusinessId={tenantId} onUnprovisionDevice={reset}>
     <div
       className="min-h-screen flex bg-[#FBFBFD] overflow-hidden relative"
       onTouchStart={handleTouchStart}
@@ -346,13 +251,14 @@ export function LiquidOS() {
           <img src={payLogo} alt="IDIA Pay" className="h-9 w-9 rounded-[10px]" />
           <div>
             <p className="text-[14px] font-semibold leading-tight">IDIA Pay</p>
-            <p className="text-[11px] text-muted-foreground leading-tight">{phase.subModule.label}</p>
+            <p className="text-[11px] text-muted-foreground leading-tight">
+              {phase.subModule.label}
+            </p>
           </div>
         </div>
 
         <button
           onClick={() => {
-            console.log("[INFO] Returning to Selection Grid.");
             setPhase({ kind: "selection", carton: phase.carton });
             setIsSidebarOpen(true);
           }}
@@ -374,8 +280,7 @@ export function LiquidOS() {
                 key={s}
                 onClick={() => {
                   setActiveScreen(s);
-                  // Auto-hide upon Nano-Bite screen selection
-                  setIsSidebarOpen(false); 
+                  setIsSidebarOpen(false);
                 }}
                 className={`text-left h-10 px-3 text-[13px] font-medium transition-all shrink-0 ${
                   active ? "text-white shadow-sm" : "text-foreground hover:bg-secondary"
@@ -394,14 +299,12 @@ export function LiquidOS() {
         <div className="mt-auto flex flex-col gap-2 px-2 pb-1">
           <div className="h-px bg-border" />
           <button
-            onClick={reset}
+            onClick={() => void logout()}
             className="text-[12px] text-muted-foreground hover:text-foreground text-left"
           >
             ↻ End Session
           </button>
-          <p className="text-[10px] text-muted-foreground">
-            {phase.carton.provisioningCode}
-          </p>
+          <p className="text-[10px] text-muted-foreground">{phase.carton.provisioningCode}</p>
         </div>
       </aside>
 
@@ -424,19 +327,19 @@ export function LiquidOS() {
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-20">
           {bites.map((nb) => (
-            <NanoBiteRenderer 
-              key={nb.id} 
-              spec={nb} 
-              carton={phase.carton} 
-              subModule={phase.subModule} 
+            <NanoBiteRenderer
+              key={nb.id}
+              spec={nb}
+              carton={phase.carton}
+              subModule={phase.subModule}
             />
           ))}
         </div>
       </main>
     </div>
-    </TenancyProvider>
   );
 }
+
 
 function NanoBiteRenderer({
   spec,
