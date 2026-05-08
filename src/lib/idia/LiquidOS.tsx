@@ -29,6 +29,7 @@ const ATOM_FILE_MAP: Record<string, string> = {
   "hosp.ft.sales.mobile_pos": "MobilePosSale",
   "hosp.ft.infra.health": "HealthPermitLog",
   "hosp.ft.ops.restock": "CommissaryRestock",
+  "hosp.ft.ops.tva.variance": "TvAVarianceManager",
 };
 
 type Phase =
