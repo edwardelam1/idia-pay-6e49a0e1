@@ -119,7 +119,9 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <Outlet />
+      <LiquidOSErrorBoundary>
+        <Outlet />
+      </LiquidOSErrorBoundary>
     </QueryClientProvider>
   );
 }
