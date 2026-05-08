@@ -644,7 +644,7 @@ function IntakeFactory({
       const { error } = await supabase.from("inventory_items").insert({
         business_id: businessId,
         name: data.name.trim(),
-        category: data.category.trim() || null,
+        category: data.category.trim() || "Uncategorized",
         barcode: data.barcode.trim() || null,
         vendor_sku: data.vendor_sku.trim() || null,
         unit_of_measure: data.unit_of_measure,
