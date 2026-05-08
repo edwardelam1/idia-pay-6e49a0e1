@@ -1071,6 +1071,7 @@ function ReceivePO({
 function PhysicalCount({
   items,
   businessId,
+  locationId,
   onComplete,
 }: {
   items: InventoryItem[];
