@@ -1,12 +1,13 @@
 /**
  * NANO-BITE ID: sys.auth.gate
  * NANO-BITE NAME: IDIA Pay Auth Gate
- * ROLE: Identity Verification
+ * ROLE: Identity Verification (rate-limit resilient)
  */
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
+import HCaptcha from "@hcaptcha/react-hcaptcha";
 import { supabase } from "@/integrations/supabase/client";
-import { Mail, KeyRound, RotateCcw } from "lucide-react";
+import { Mail, KeyRound, RotateCcw, ShieldQuestion } from "lucide-react";
 import payLogo from "@/assets/idia-pay-logo.jpg";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,11 +21,27 @@ interface AuthGateProps {
   onUnprovisionDevice?: () => void;
 }
 
+const HCAPTCHA_SITE_KEY = import.meta.env.VITE_HCAPTCHA_SITE_KEY as string | undefined;
+
+function isRateLimitError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { status?: number; code?: string; message?: string };
+  if (e.status === 429) return true;
+  if (e.code === "over_email_send_rate_limit") return true;
+  if (typeof e.message === "string" && /rate limit/i.test(e.message)) return true;
+  return false;
+}
+
 function AuthGateCore({ onUnprovisionDevice }: AuthGateProps) {
   const [step, setStep] = useState<"email" | "otp">("email");
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
+  const [attemptCount, setAttemptCount] = useState(0);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const captchaRef = useRef<HCaptcha>(null);
+
+  const requireCaptcha = attemptCount >= 1 && !!HCAPTCHA_SITE_KEY;
 
   const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,10 +53,29 @@ function AuthGateCore({ onUnprovisionDevice }: AuthGateProps) {
       return;
     }
 
+    if (requireCaptcha && !captchaToken) {
+      toast.error("Please complete the captcha challenge.");
+      return;
+    }
+
     setIsProcessing(true);
+    setAttemptCount((n) => n + 1);
+
     try {
-      const { error } = await supabase.auth.signInWithOtp({ email: email.trim() });
-      if (error) throw error;
+      const { error } = await supabase.auth.signInWithOtp({
+        email: email.trim(),
+        options: captchaToken ? { captchaToken } : undefined,
+      });
+
+      if (error) {
+        if (isRateLimitError(error)) {
+          logPlanck("STALL", "AUTH_RATE_LIMIT", "Server rate limit hit. Advancing to OTP entry.", error);
+          toast.warning("Rate limit hit — if a previous code arrived, enter it below.");
+          setStep("otp");
+          return;
+        }
+        throw error;
+      }
 
       logPlanck("END", "AUTH_REQUEST_SUCCESS", "OTP dispatched to email.");
       setStep("otp");
@@ -49,8 +85,30 @@ function AuthGateCore({ onUnprovisionDevice }: AuthGateProps) {
       const message = err instanceof Error ? err.message : "Failed to send security code.";
       toast.error(message);
     } finally {
+      captchaRef.current?.resetCaptcha();
+      setCaptchaToken(null);
       setIsProcessing(false);
     }
+  };
+
+  const handleSkipToOtp = () => {
+    if (!email.trim() || !email.includes("@")) {
+      toast.error("Enter the email a previous code was sent to first.");
+      return;
+    }
+    logPlanck("TRIGGER", "AUTH_SKIP_TO_OTP", "User has existing code, advancing manually.");
+    setStep("otp");
+  };
+
+  const handleResetClearance = () => {
+    logPlanck("TRIGGER", "AUTH_RESET", "User reset clearance form.");
+    setStep("email");
+    setEmail("");
+    setOtp("");
+    setAttemptCount(0);
+    setCaptchaToken(null);
+    captchaRef.current?.resetCaptcha();
+    toast.info("Form cleared. Server cooldown may still apply (~60s).");
   };
 
   const handleVerifyOtp = async (e: React.FormEvent) => {
@@ -72,7 +130,6 @@ function AuthGateCore({ onUnprovisionDevice }: AuthGateProps) {
       logPlanck("STALL", "AUTH_VERIFY", "Verification failed.", err);
       const message = err instanceof Error ? err.message : "Authentication sequence failed.";
       toast.error(message);
-      setStep("email");
       setOtp("");
       setIsProcessing(false);
     }
@@ -108,13 +165,41 @@ function AuthGateCore({ onUnprovisionDevice }: AuthGateProps) {
                   disabled={isProcessing}
                 />
               </div>
+
+              {requireCaptcha && (
+                <div className="flex justify-center">
+                  <HCaptcha
+                    ref={captchaRef}
+                    sitekey={HCAPTCHA_SITE_KEY!}
+                    onVerify={(token) => setCaptchaToken(token)}
+                    onExpire={() => setCaptchaToken(null)}
+                  />
+                </div>
+              )}
+              {attemptCount >= 1 && !HCAPTCHA_SITE_KEY && (
+                <p className="text-xs text-muted-foreground text-center">
+                  Retry without captcha — server cooldown may still apply.
+                </p>
+              )}
+
               <Button
                 type="submit"
-                disabled={isProcessing}
+                disabled={isProcessing || (requireCaptcha && !captchaToken)}
                 className="w-full min-h-[72px] text-xl font-black rounded-3xl shadow-lg active:scale-[0.98] transition-transform"
               >
                 {isProcessing ? "TRANSMITTING..." : "REQUEST CLEARANCE"}
               </Button>
+
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={handleSkipToOtp}
+                disabled={isProcessing}
+                className="w-full text-xs uppercase tracking-widest text-muted-foreground"
+              >
+                <ShieldQuestion className="w-4 h-4 mr-2" /> I Already Have A Code
+              </Button>
+
               {onUnprovisionDevice && (
                 <Button
                   type="button"
@@ -145,9 +230,7 @@ function AuthGateCore({ onUnprovisionDevice }: AuthGateProps) {
                   maxLength={6}
                   disabled={isProcessing}
                 />
-                <p className="text-xs text-muted-foreground text-center">
-                  Sent to {email}
-                </p>
+                <p className="text-xs text-muted-foreground text-center">Sent to {email}</p>
               </div>
 
               <div className="space-y-2">
@@ -169,6 +252,15 @@ function AuthGateCore({ onUnprovisionDevice }: AuthGateProps) {
                   className="w-full"
                 >
                   Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={handleResetClearance}
+                  disabled={isProcessing}
+                  className="w-full text-xs uppercase tracking-widest text-muted-foreground"
+                >
+                  <RotateCcw className="w-4 h-4 mr-2" /> Reset Form (Server Cooldown ~60s)
                 </Button>
               </div>
             </form>
